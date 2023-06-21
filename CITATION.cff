@@ -1,0 +1,10 @@
+cff-version: 1.1.0
+message: Software reference
+title: smartscout-scrape
+version: 0.1.0
+abstract: Lightweight data-extraction & general use library for smartscout.com
+authors:
+    - family-names: $${author.last#1}
+      given-names: $${author.first#1}
+keywords: ["scraper", "data science", "requests", "python", "data"]
+date-released: $${today.zulu}
