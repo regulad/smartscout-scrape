@@ -19,12 +19,20 @@ permissions and limitations under the License.
 
 from __future__ import annotations
 
+import csv
 import logging
 import time
+from pathlib import Path
+from typing import Optional, cast
 
+import _csv
 import typer
+from requests import HTTPError
+from rich.logging import RichHandler
+from rich.progress import Progress
 
-from smartscoutscrape import __copyright__, __title__, __version__, metadata
+from smartscoutscrape import SmartScoutSession, __copyright__, __title__, __version__, metadata
+from smartscoutscrape.utils import dot_access
 
 logger = logging.getLogger(__package__)
 cli = typer.Typer()
@@ -53,6 +61,81 @@ def info(n_seconds: float = 0.01, verbose: bool = False) -> None:
             time.sleep(n_seconds)
             total += 1
     typer.echo(f"Processed {total} things.")
+
+
+@cli.command()
+def generate(
+    username: str,
+    password: Optional[str] = None,
+    filename: Path = Path.cwd().joinpath("smartscout.csv"),
+    log_level: str = "WARNING",
+) -> None:
+    """
+    Generate a CSV file of all products and their data on SmartScout.
+    """
+    if password is None:
+        password = typer.prompt("Please enter your password:", hide_input=True)
+
+    log_level_int = cast(int, logging.getLevelName(log_level.upper()))
+    logging.basicConfig(level=log_level_int, handlers=[RichHandler()])
+
+    if filename.exists() and "test" not in filename.stem:
+        raise FileExistsError(f"File {filename} already exists.")
+    elif filename.exists() and "test" in filename.stem:
+        logger.warning(f"File {filename} already exists. Overwriting.")
+
+    with filename.open(
+        "w", newline="", encoding="utf-8"
+    ) as fp, SmartScoutSession() as session, Progress() as progress:
+        writer: _csv.Writer = csv.writer(fp, dialect="excel")
+        # no close required
+
+        login_task = progress.add_task("Logging in...", total=1)
+        session.login(username, password)
+        progress.update(login_task, completed=1)
+
+        login_task = progress.add_task("Getting categories...", total=1)
+        categories = session.categories()
+        progress.update(login_task, completed=1)
+
+        product_count_task = progress.add_task("Getting product count...", total=len(categories))
+        total_products = 0
+        for category in categories:
+            try:
+                total_products += session.get_number_of_products(category_id=category["id"])
+            except HTTPError as e:
+                logger.warning(f"Could not get product count for category {category}: {e}")
+            progress.update(product_count_task, advance=1)
+        progress.update(product_count_task, completed=len(categories))
+        logger.info(f"Found {total_products} categories.")
+
+        database_construction_task = progress.add_task("Writing headers...", total=1)
+        fields = session.DEFAULT_FIELDS
+        writer.writerow(fields)
+        progress.update(database_construction_task, completed=1)
+        logger.info(f"Using {len(fields)} fields.")
+
+        product_task = progress.add_task(
+            "Downloading products...", total=total_products, visible=True, start=False
+        )
+        for i, product in enumerate(session.search_products_recursive()):
+            if i == 0:
+                # done with init
+                progress.start_task(product_task)
+
+            row_data = [dot_access(product, field) for field in fields]
+
+            # special handling for images
+            if "imageUrl" in fields:
+                current_image_url: str | None = row_data[fields.index("imageUrl")]
+                if current_image_url is not None:
+                    row_data[fields.index("imageUrl")] = session.get_b64_image_from_product(product)
+
+            # write it and move on
+            writer.writerow(row_data)
+            progress.update(product_task, completed=i + 1, visible=True)
+        progress.update(product_task, completed=total_products)
+        logger.info(f"Done! Downloaded {total_products} products.")
 
 
 if __name__ == "__main__":
