@@ -344,11 +344,11 @@ source = ["smartscoutscrape"]
 show_missing = true
 
 [tool.black]
-line-length = 100
+line-length = 119
 target-version = ["py311"]
 
 [tool.isort]
-line_length = 100
+line_length = 119
 
 [mypy]
 check_untyped_defs = true

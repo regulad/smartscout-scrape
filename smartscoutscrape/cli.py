@@ -22,7 +22,11 @@ from __future__ import annotations
 import csv
 import logging
 import time
+from concurrent.futures.thread import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
+from queue import SimpleQueue
+from threading import Lock
 from typing import Optional, cast
 
 import typer
@@ -82,53 +86,92 @@ def generate(
     elif filename.exists() and "test" in filename.stem:
         logger.warning(f"File {filename} already exists. Overwriting.")
 
-    with filename.open(
-        "w", newline="", encoding="utf-8"
-    ) as fp, SmartScoutSession() as session, Progress() as progress:
-        writer = csv.writer(fp, dialect="excel")
-        # no close required
+    # fmt: off
+    with filename.open("w", newline="", encoding="utf-8") as fp, \
+            SmartScoutSession() as session, \
+            Progress() as progress, \
+            ThreadPoolExecutor() as executor:
+        # fmt: on
+        writer = csv.writer(fp, dialect="excel")  # no close required
 
         login_task = progress.add_task("Logging in...", total=None)
         session.login(username, password)
         progress.update(login_task, total=1, completed=1)
+        progress.remove_task(login_task)
+
+        category_task = progress.add_task("Getting categories...", total=None)
+        categories = session.categories()
+        progress.update(category_task, total=1, completed=1)
+        progress.remove_task(category_task)
 
         product_count_task = progress.add_task("Getting product count...", total=None)
         total_products = session.get_total_number_of_products()
         progress.update(product_count_task, total=1, completed=1)
+        progress.remove_task(product_count_task)
 
         database_construction_task = progress.add_task("Writing headers...", total=None)
         fields = session.ALL_FIELDS
         writer.writerow(fields)
         progress.update(database_construction_task, total=1, completed=1)
         logger.info(f"Using {len(fields)} fields.")
+        progress.remove_task(database_construction_task)
 
-        product_task = progress.add_task(
-            "Downloading products...", total=total_products, visible=True, start=False
-        )
-        for i, product in enumerate(session.search_products_recursive()):
+        product_task = progress.add_task("Downloading products...", total=total_products, start=False)
+
+        # parallelism to improve performance
+        seen_products = set()
+        product_lock_lock = Lock()
+        line_queue = SimpleQueue()
+        categories_done = 0
+
+        def _scrape_category(category_id: int) -> None:
+            nonlocal categories_done
+
             try:
-                if i == 0:
-                    # done with init
-                    progress.start_task(product_task)
+                for i, product in enumerate(session.search_products(category_id=category_id)):
+                    try:
+                        row_data = [dot_access(product, field) for field in fields]
 
-                row_data = [dot_access(product, field) for field in fields]
+                        asin = row_data[fields.index("asin")]
 
-                # special handling for images
-                if "imageUrl" in fields:
-                    current_image_url: str | None = row_data[fields.index("imageUrl")]
-                    if current_image_url is not None:
-                        row_data[fields.index("imageUrl")] = session.get_b64_image_from_product(
-                            product
-                        )
+                        # make sure we don't double-write
+                        with product_lock_lock:
+                            if asin in seen_products:
+                                # this isn't an error because some products are in multiple categories
+                                continue
 
-                # write it and move on
-                writer.writerow(row_data)
-            except Exception as e:
-                logger.warning(f"Could not get product {product}: {e}")
+                            seen_products.add(asin)
+
+                        # special handling for images
+                        if "imageUrl" in fields:
+                            image_url: str | None = row_data[fields.index("imageUrl")]
+                            if image_url is not None:
+                                row_data[fields.index("imageUrl")] = session.get_b64_image_from_product(
+                                    product
+                                )
+
+                        # write it and move on
+                        line_queue.put(row_data)
+                    except Exception as e:
+                        logger.warning(f"Could not get product {product}: {e}")
             finally:
-                progress.update(product_task, completed=i + 1, visible=True)
-        progress.update(product_task, completed=total_products)
-        logger.info(f"Done! Downloaded {total_products} products.")
+                categories_done += 1
+
+        thread_startup_task = progress.add_task("Spawning downloaders...", total=len(categories))
+        for category in categories:
+            executor.submit(partial(_scrape_category, category["id"]))
+            progress.advance(thread_startup_task)
+        progress.remove_task(thread_startup_task)
+
+        progress.start_task(product_task)
+        while categories_done < len(categories) or not line_queue.empty():
+            row_data = line_queue.get()
+            writer.writerow(row_data)
+            progress.advance(product_task)
+
+        progress.update(product_task, total=len(seen_products), completed=len(seen_products))
+
+        logger.info(f"Done! Downloaded {len(seen_products)} products.")
 
 
 if __name__ == "__main__":
