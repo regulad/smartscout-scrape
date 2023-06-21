@@ -17,11 +17,14 @@ permissions and limitations under the License.
 
 """
 import base64
+import json
 import random
 import string
+import time
 from typing import Generator, Literal, Self, Sequence, TypeAlias
 
 from requests import Session
+from requests.structures import CaseInsensitiveDict
 
 Marketplace: TypeAlias = Literal[
     "US",  # Amazon US
@@ -39,7 +42,7 @@ Marketplace: TypeAlias = Literal[
 class SmartScoutSession:
     # Class variables
 
-    DEFAULT_FIELDS = [
+    ALL_FIELDS = [
         "brandId",
         "subcategoryId",
         "imageUrl",
@@ -115,9 +118,26 @@ class SmartScoutSession:
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.req.close()
 
+    def refresh_jwt(self) -> None:
+        pass  # TODO: implement
+
+    @property
+    def authorization(self) -> str | None:
+        if self.access_jwt is None:
+            return None
+        if self.expired:
+            self.refresh_jwt()
+        return f"Bearer {self.access_jwt}"
+
     @property
     def expired(self) -> bool:
-        return self.access_jwt is None  # TODO: check if expired
+        if self.access_jwt is None:
+            return True
+        decoded_jwt = self.access_jwt.split(".")[1]
+        decoded_jwt += "=" * ((4 - len(decoded_jwt) % 4) % 4)
+        decoded_jwt_plaintext = base64.b64decode(decoded_jwt).decode("utf-8")
+        decoded_jwt_data = json.loads(decoded_jwt_plaintext)
+        return decoded_jwt_data["exp"] < time.time()
 
     @property
     def logged_in(self) -> bool:
@@ -130,24 +150,26 @@ class SmartScoutSession:
     def _request_id(self) -> str:
         return f"{self._req_id_header}.{self.random_characters(16)}"
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self) -> CaseInsensitiveDict[str]:
         req_id = self._request_id()  # only for this request
 
-        req_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-            # "Accept": "text/plain",  # idk why the website doesn't use application/json
-            # "Accept-Language": "en-US,en;q=0.9",
-            # "Accept-Encoding": "gzip, deflate, br",
-            # "Connection": "keep-alive",
-            "Referer": "https://app.smartscout.com/",
-            "Origin": "https://app.smartscout.com",
-            "X-Smartscout-Marketplace": self.marketplace,
-            "Request-ID": f"|{req_id}",  # not sure if needed
-            "Traceparent": f"00-{req_id}-0",  # not sure if needed
-        }
+        req_headers = CaseInsensitiveDict(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+                # "Accept": "text/plain",  # idk why the website doesn't use application/json
+                # "Accept-Language": "en-US,en;q=0.9",
+                # "Accept-Encoding": "gzip, deflate, br",
+                # "Connection": "keep-alive",
+                "Referer": "https://app.smartscout.com/",
+                "Origin": "https://app.smartscout.com",
+                "X-Smartscout-Marketplace": self.marketplace,
+                "Request-ID": f"|{req_id}",  # not sure if needed
+                "Traceparent": f"00-{req_id}-0",  # not sure if needed
+            }
+        )
 
-        if self.access_jwt is not None:
-            req_headers["Authorization"] = f"Bearer {self.access_jwt}"
+        if self.authorization is not None:
+            req_headers["Authorization"] = self.authorization
 
         return req_headers
 
@@ -316,7 +338,10 @@ class SmartScoutSession:
     def get_b64_image_from_product(self, product: dict) -> str:
         image_url_id = product["imageUrl"]
 
-        image_url = f"https://images-na.ssl-images-amazon.com/images/I/{image_url_id}"
+        if image_url_id.startswith("https://") or image_url_id.startswith("http://"):
+            image_url = image_url_id
+        else:
+            image_url = f"https://images-na.ssl-images-amazon.com/images/I/{image_url_id}"
 
         with self.req.get(image_url, headers=self._headers()) as resp:
             resp.raise_for_status()
@@ -334,12 +359,13 @@ class SmartScoutSession:
         self,
         category_id: int | None = None,
         fields: Sequence[str] | None = None,
+        load_default_data: bool | None = None,
         *,
         start_row: int,
         end_row: int,
     ) -> tuple[int | None, list[dict]]:
-        # TODO: document other fields
         if category_id is not None:
+            # TODO: Add other filters if needed
             filters = {
                 "categoryId": {"values": [str(category_id)], "filterType": "set"},
                 "rank": {"min": None, "max": None},
@@ -355,11 +381,14 @@ class SmartScoutSession:
             filters = {}
 
         if fields is None:
-            fields = self.DEFAULT_FIELDS
+            fields = self.ALL_FIELDS
+
+        if load_default_data is None:
+            load_default_data = not bool(filters)
 
         payload = {
             "filter": filters,
-            "loadDefaultData": not bool(filters),  # load default data if there are no filters
+            "loadDefaultData": load_default_data,
             "pageFilter": {
                 "startRow": start_row,
                 "endRow": end_row,
@@ -380,12 +409,20 @@ class SmartScoutSession:
 
             return data["pageInfo"]["totalRowCount"], data["payload"]
 
-    def get_number_of_products(self, *args, **kwargs) -> int:
+    def get_number_of_products(self, category_id: int | None) -> int:
         """
         Get the number of products that match the search criteria
         """
-        total_row_count, _ = self._search_products_one_page(*args, **kwargs, start_row=0, end_row=1)
+        total_row_count, _ = self._search_products_one_page(
+            category_id=category_id, load_default_data=False, fields=[], start_row=0, end_row=1
+        )
         return total_row_count
+
+    def get_total_number_of_products(self) -> int:
+        """
+        Get the total number of all products in the database.
+        """
+        return self.get_number_of_products(category_id=None)
 
     def search_products(
         self,
@@ -409,17 +446,6 @@ class SmartScoutSession:
             end_row += row_step
 
             yield from products
-
-    def get_accumulative_number_of_products(self) -> int:
-        """
-        Get the total number of all products in the database.
-        """
-        accumulator = 0
-
-        for category in self.categories():
-            accumulator += self.get_number_of_products(category_id=int(category["id"]))
-
-        return accumulator
 
     def search_products_recursive(
         self, fields: Sequence[str] | None = None

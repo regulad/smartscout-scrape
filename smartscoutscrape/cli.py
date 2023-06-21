@@ -25,9 +25,7 @@ import time
 from pathlib import Path
 from typing import Optional, cast
 
-import _csv
 import typer
-from requests import HTTPError
 from rich.logging import RichHandler
 from rich.progress import Progress
 
@@ -87,53 +85,48 @@ def generate(
     with filename.open(
         "w", newline="", encoding="utf-8"
     ) as fp, SmartScoutSession() as session, Progress() as progress:
-        writer: _csv.Writer = csv.writer(fp, dialect="excel")
+        writer = csv.writer(fp, dialect="excel")
         # no close required
 
-        login_task = progress.add_task("Logging in...", total=1)
+        login_task = progress.add_task("Logging in...", total=None)
         session.login(username, password)
-        progress.update(login_task, completed=1)
+        progress.update(login_task, total=1, completed=1)
 
-        login_task = progress.add_task("Getting categories...", total=1)
-        categories = session.categories()
-        progress.update(login_task, completed=1)
+        product_count_task = progress.add_task("Getting product count...", total=None)
+        total_products = session.get_total_number_of_products()
+        progress.update(product_count_task, total=1, completed=1)
 
-        product_count_task = progress.add_task("Getting product count...", total=len(categories))
-        total_products = 0
-        for category in categories:
-            try:
-                total_products += session.get_number_of_products(category_id=category["id"])
-            except HTTPError as e:
-                logger.warning(f"Could not get product count for category {category}: {e}")
-            progress.update(product_count_task, advance=1)
-        progress.update(product_count_task, completed=len(categories))
-        logger.info(f"Found {total_products} categories.")
-
-        database_construction_task = progress.add_task("Writing headers...", total=1)
-        fields = session.DEFAULT_FIELDS
+        database_construction_task = progress.add_task("Writing headers...", total=None)
+        fields = session.ALL_FIELDS
         writer.writerow(fields)
-        progress.update(database_construction_task, completed=1)
+        progress.update(database_construction_task, total=1, completed=1)
         logger.info(f"Using {len(fields)} fields.")
 
         product_task = progress.add_task(
             "Downloading products...", total=total_products, visible=True, start=False
         )
         for i, product in enumerate(session.search_products_recursive()):
-            if i == 0:
-                # done with init
-                progress.start_task(product_task)
+            try:
+                if i == 0:
+                    # done with init
+                    progress.start_task(product_task)
 
-            row_data = [dot_access(product, field) for field in fields]
+                row_data = [dot_access(product, field) for field in fields]
 
-            # special handling for images
-            if "imageUrl" in fields:
-                current_image_url: str | None = row_data[fields.index("imageUrl")]
-                if current_image_url is not None:
-                    row_data[fields.index("imageUrl")] = session.get_b64_image_from_product(product)
+                # special handling for images
+                if "imageUrl" in fields:
+                    current_image_url: str | None = row_data[fields.index("imageUrl")]
+                    if current_image_url is not None:
+                        row_data[fields.index("imageUrl")] = session.get_b64_image_from_product(
+                            product
+                        )
 
-            # write it and move on
-            writer.writerow(row_data)
-            progress.update(product_task, completed=i + 1, visible=True)
+                # write it and move on
+                writer.writerow(row_data)
+            except Exception as e:
+                logger.warning(f"Could not get product {product}: {e}")
+            finally:
+                progress.update(product_task, completed=i + 1, visible=True)
         progress.update(product_task, completed=total_products)
         logger.info(f"Done! Downloaded {total_products} products.")
 

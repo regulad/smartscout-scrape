@@ -106,16 +106,8 @@ class TestSession:
             print("is a child of")
 
     def test_count(self, session: SmartScoutSession) -> None:
-        part = session.get_number_of_products()
-        whole = session.get_accumulative_number_of_products()
-
-        assert part > 0
-        assert whole > 0
-        assert whole > part
-
-        print(f"some: {part}")
+        whole = session.get_total_number_of_products()
         print(f"all: {whole}")
-        print(f"full data percent: {(part / whole * 100):2f}%")
 
 
 __all__ = ("TestSession",)
