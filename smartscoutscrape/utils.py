@@ -16,6 +16,7 @@ or implied. See the License for the specific language governing
 permissions and limitations under the License.
 
 """
+import os
 from typing import Any, Mapping
 
 
@@ -33,4 +34,6 @@ def dot_access(mapping: Mapping[str, str | Any], locator: str) -> Any | None:
     return item
 
 
-__all__ = ("dot_access",)
+THREADING_SAFE_MAX_WORKERS = min(32, (os.cpu_count() or 1) + 4)
+
+__all__ = ("dot_access", "THREADING_SAFE_MAX_WORKERS")

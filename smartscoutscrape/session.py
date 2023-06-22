@@ -24,7 +24,10 @@ import time
 from typing import Generator, Literal, Self, Sequence, TypeAlias
 
 from requests import Session
+from requests.adapters import HTTPAdapter
 from requests.structures import CaseInsensitiveDict
+
+from smartscoutscrape.utils import THREADING_SAFE_MAX_WORKERS
 
 Marketplace: TypeAlias = Literal[
     "US",  # Amazon US
@@ -107,6 +110,11 @@ class SmartScoutSession:
         self._req_id_header = self.random_characters(32)
 
         self.req = Session()
+        adapter = HTTPAdapter(
+            max_retries=3, pool_connections=THREADING_SAFE_MAX_WORKERS, pool_maxsize=THREADING_SAFE_MAX_WORKERS
+        )
+        self.req.mount("https://", adapter)
+        self.req.mount("http://", adapter)
         self.req.headers.update(self._headers())
 
         self._category_cache = None
@@ -447,9 +455,7 @@ class SmartScoutSession:
 
             yield from products
 
-    def search_products_recursive(
-        self, fields: Sequence[str] | None = None
-    ) -> Generator[dict, None, None]:
+    def search_products_recursive(self, fields: Sequence[str] | None = None) -> Generator[dict, None, None]:
         """
         Search all products in all categories recursively
         """
