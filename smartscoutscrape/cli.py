@@ -38,8 +38,8 @@ import typer
 from rich.logging import RichHandler
 from rich.progress import Progress
 
-from smartscoutscrape import (AmazonBaseSession, AmazonScrapeSession, SmartScoutSession, __copyright__, __title__,
-                              __version__, metadata)
+from smartscoutscrape import (AmazonBaseSession, AmazonBrowserSession, AmazonScrapeSession, SmartScoutSession,
+                              __copyright__, __title__, __version__, metadata)
 from smartscoutscrape.utils import THREADING_SAFE_MAX_WORKERS, dot_access
 
 # fmt: on
@@ -255,6 +255,7 @@ def generate(
 def extend(
     in_folder: Path = Path.cwd().joinpath("smartscout"),
     out_folder: Path = Path.cwd().joinpath("smartscout-extended"),
+    use_browser: bool = False,
     log_level: str = "WARNING",
     dump_html: bool = False,
 ) -> None:
@@ -281,7 +282,14 @@ def extend(
 
     with Progress() as progress, ThreadPoolExecutor(max_workers=THREADING_SAFE_MAX_WORKERS) as executor:
         startup_task = progress.add_task("Starting up...", total=None)
-        with AmazonScrapeSession() as session:  # type: AmazonBaseSession
+
+        session: AmazonBaseSession
+        if use_browser:
+            session = AmazonBrowserSession()
+        else:
+            session = AmazonScrapeSession()
+
+        with session:
             progress.update(startup_task, total=1, completed=1)
             progress.remove_task(startup_task)
 
