@@ -16,7 +16,9 @@ or implied. See the License for the specific language governing
 permissions and limitations under the License.
 
 """
+import csv
 import os
+import sys
 from typing import Any, Mapping
 
 
@@ -36,4 +38,24 @@ def dot_access(mapping: Mapping[str, str | Any], locator: str) -> Any | None:
 
 THREADING_SAFE_MAX_WORKERS = min(32, (os.cpu_count() or 1) + 4)
 
-__all__ = ("dot_access", "THREADING_SAFE_MAX_WORKERS")
+
+def increase_csv_maxlen() -> int:
+    largest_possible_int = sys.maxsize
+
+    while True:
+        # decrease the maxInt value by factor 10
+        # as long as the OverflowError occurs.
+
+        try:
+            csv.field_size_limit(largest_possible_int)
+            break
+        except OverflowError:
+            largest_possible_int = int(largest_possible_int / 10)
+
+    return largest_possible_int
+
+
+increase_csv_maxlen()
+
+
+__all__ = ("dot_access", "THREADING_SAFE_MAX_WORKERS", "increase_csv_maxlen")

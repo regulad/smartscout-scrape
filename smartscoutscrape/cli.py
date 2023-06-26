@@ -374,16 +374,4 @@ def extend(
 
 
 if __name__ == "__main__":
-    largest_possible_int = sys.maxsize
-
-    while True:
-        # decrease the maxInt value by factor 10
-        # as long as the OverflowError occurs.
-
-        try:
-            csv.field_size_limit(largest_possible_int)
-            break
-        except OverflowError:
-            largest_possible_int = int(largest_possible_int / 10)
-
     cli()
