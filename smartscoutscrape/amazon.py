@@ -6,11 +6,14 @@ from typing import Self
 
 from bs4 import BeautifulSoup
 from requests import Session
+from requests.adapters import HTTPAdapter
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.webdriver import WebDriver as ChromeDriver
 from selenium.webdriver.support.wait import WebDriverWait
 from undetected_chromedriver import Chrome as UndetectedChromeDriver
 from undetected_chromedriver import ChromeOptions as UndetectedChromeOptions
+
+from smartscoutscrape.utils import THREADING_SAFE_MAX_WORKERS
 
 
 class AmazonBaseSession(metaclass=ABCMeta):
@@ -185,6 +188,12 @@ class AmazonScrapeSession(AmazonBaseSession):
             "User-Agent"
         ] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
         self.req.headers["Viewport-Width"] = "1920"
+
+        adapter = HTTPAdapter(
+            max_retries=3, pool_connections=THREADING_SAFE_MAX_WORKERS, pool_maxsize=THREADING_SAFE_MAX_WORKERS
+        )
+        self.req.mount("https://", adapter)
+        self.req.mount("http://", adapter)
 
         if proxy is not None:
             proxies = {"http": proxy, "https": proxy}

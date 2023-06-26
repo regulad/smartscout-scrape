@@ -24,6 +24,7 @@ from __future__ import annotations
 import csv
 import logging
 import math
+import sys
 import time
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import partial
@@ -278,7 +279,7 @@ def extend(
     if not in_folder.is_absolute():
         in_folder = in_folder.resolve()
 
-    with Progress() as progress, ThreadPoolExecutor() as executor:
+    with Progress() as progress, ThreadPoolExecutor(max_workers=THREADING_SAFE_MAX_WORKERS) as executor:
         startup_task = progress.add_task("Starting up...", total=None)
         with AmazonScrapeSession() as session:  # type: AmazonBaseSession
             progress.update(startup_task, total=1, completed=1)
@@ -304,6 +305,12 @@ def extend(
 
                             # lets get an estimate of how many lines we have to process
                             total_length_in_bytes = file.stat().st_size
+
+                            if file.stat().st_size < 1000:
+                                # this is a stub
+                                progress.update(single_file_task, total=1, completed=1)
+                                return
+
                             source_fp.readline()  # skip the header
                             line1 = source_fp.readline()
                             line2 = source_fp.readline()
@@ -347,6 +354,7 @@ def extend(
                                     writer.writerow(data)
                                 except Exception as e:
                                     logger.warning(f"Could not extend row in {file}: {e}")
+                                    continue
                                 finally:
                                     progress.advance(single_file_task)
                         progress.update(single_file_task, total=1, completed=1)
@@ -366,4 +374,16 @@ def extend(
 
 
 if __name__ == "__main__":
+    largest_possible_int = sys.maxsize
+
+    while True:
+        # decrease the maxInt value by factor 10
+        # as long as the OverflowError occurs.
+
+        try:
+            csv.field_size_limit(largest_possible_int)
+            break
+        except OverflowError:
+            largest_possible_int = int(largest_possible_int / 10)
+
     cli()
