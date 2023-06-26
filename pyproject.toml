@@ -96,10 +96,15 @@ smartscout-scrape = "smartscoutscrape.cli:cli"
 [tool.poetry.dependencies]
 # TODO Add and remove dependencies here
 # These are dependencies that are included in the main package
-python                   = "^3.11"
-typer                    = {version = "^0.9.0", extras = ["all"]}
+python = "^3.11"
+typer = { version = "^0.9.0", extras = ["all"] }
 requests = "^2.31.0"
 b64 = "^0.4"
+undetected-chromedriver = "^3.5.0"
+selenium = "^4.10.0"
+rich = "^13.4.2"
+beautifulsoup4 = "^4.12.2"
+minify-html = "^0.11.1"
 
 [tool.poetry.dev-dependencies]
 # TODO Remove build dependencies you don't want (like xdoctest, perhaps)

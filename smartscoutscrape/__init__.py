@@ -22,6 +22,7 @@ from importlib.metadata import metadata as __load
 from pathlib import Path
 from typing import Sequence
 
+from .amazon import *
 from .session import *
 
 pkg = Path(__file__).absolute().parent.name

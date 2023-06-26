@@ -17,10 +17,13 @@ permissions and limitations under the License.
 
 """
 
+# fmt: off
+
 from __future__ import annotations
 
 import csv
 import logging
+import math
 import time
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import partial
@@ -29,12 +32,16 @@ from queue import Empty, Queue
 from threading import Event, Lock, Semaphore, Thread, current_thread
 from typing import Optional, cast
 
+import minify_html
 import typer
 from rich.logging import RichHandler
 from rich.progress import Progress
 
-from smartscoutscrape import SmartScoutSession, __copyright__, __title__, __version__, metadata
+from smartscoutscrape import (AmazonBaseSession, AmazonScrapeSession, SmartScoutSession, __copyright__, __title__,
+                              __version__, metadata)
 from smartscoutscrape.utils import THREADING_SAFE_MAX_WORKERS, dot_access
+
+# fmt: on
 
 logger = logging.getLogger(__package__)
 cli = typer.Typer()
@@ -74,6 +81,12 @@ def generate(
 ) -> None:
     """
     Generate a CSV file of all products and their data on SmartScout.
+
+    Args:
+        username: Your SmartScout username.
+        password: Your SmartScout password. If not provided, you will be prompted.
+        folder: The folder to save the CSV file to.
+        log_level: The log level to use. Defaults to WARNING.
     """
     if password is None:
         password = typer.prompt("Please enter your password:", hide_input=True)
@@ -235,6 +248,121 @@ def generate(
         progress.update(product_task, total=len(seen_products), completed=len(seen_products))
 
         logger.info(f"Done! Downloaded {len(seen_products)} products.")
+
+
+@cli.command()
+def extend(
+    in_folder: Path = Path.cwd().joinpath("smartscout"),
+    out_folder: Path = Path.cwd().joinpath("smartscout-extended"),
+    log_level: str = "WARNING",
+    dump_html: bool = False,
+) -> None:
+    """
+    Extend an existing SmartScout dump with additional fields like descriptions and raw HTML.
+    """
+
+    log_level_int = cast(int, logging.getLevelName(log_level.upper()))
+    logging.basicConfig(level=log_level_int, handlers=[RichHandler()])
+
+    if not in_folder.exists():
+        raise ValueError(f"Folder {in_folder} does not exist.")
+
+    if not out_folder.exists():
+        out_folder.mkdir(parents=True)
+    else:
+        logger.warning(f"Folder {out_folder} already exists. Continuing anyway.")
+
+    if not in_folder.is_dir():
+        raise ValueError(f"Folder {in_folder} is not a directory.")
+
+    if not in_folder.is_absolute():
+        in_folder = in_folder.resolve()
+
+    with Progress() as progress, ThreadPoolExecutor() as executor:
+        startup_task = progress.add_task("Starting up...", total=None)
+        with AmazonScrapeSession() as session:  # type: AmazonBaseSession
+            progress.update(startup_task, total=1, completed=1)
+            progress.remove_task(startup_task)
+
+            globs = list(in_folder.glob("*.csv"))
+
+            extending_task = progress.add_task("Extending data...", total=len(globs))
+            for file_nonlocal in globs:
+
+                def _scrape_one(file: Path) -> None:
+                    single_file_task = progress.add_task(f"Extending {file.name!r}...", total=None, start=False)
+                    try:
+                        if "extended" in file.stem:
+                            # we already went to work on this file
+                            return
+
+                        # fmt: off
+                        with open(file, "r", newline="", encoding="utf-8") as source_fp, \
+                            open(out_folder.joinpath(f"{file.stem}-extended.csv"), "w", newline="",
+                                 encoding="utf-8") as dest_fp:
+                            # fmt: on
+
+                            # lets get an estimate of how many lines we have to process
+                            total_length_in_bytes = file.stat().st_size
+                            source_fp.readline()  # skip the header
+                            line1 = source_fp.readline()
+                            line2 = source_fp.readline()
+                            line1_length_in_bytes = len(line1.encode("utf-8"))
+                            line2_length_in_bytes = len(line2.encode("utf-8"))
+                            avg_line_length_in_bytes = (line1_length_in_bytes + line2_length_in_bytes) / 2
+                            total_lines_estimate = math.ceil(total_length_in_bytes / avg_line_length_in_bytes)
+                            progress.update(single_file_task, total=total_lines_estimate, completed=0)
+                            # go back to the start
+                            source_fp.seek(0)
+
+                            reader = csv.reader(source_fp, dialect="excel")
+                            writer = csv.writer(dest_fp, dialect="excel")
+
+                            parent_headers = next(reader)
+                            dest_headers = ["asin", "description", "about", "aplus"]
+
+                            if dump_html:
+                                dest_headers.append("html")
+
+                            writer.writerow(dest_headers)
+
+                            progress.start_task(single_file_task)
+                            for data_row in reader:
+                                try:
+                                    asin = data_row[parent_headers.index("asin")]
+                                    soup = session.get_asin_html(asin)
+
+                                    description, about, aplus = session.get_product_info(soup)
+
+                                    data = [asin, description, about, aplus]
+
+                                    if dump_html:
+                                        html = minify_html.minify(
+                                            soup.prettify(),
+                                            minify_js=True,
+                                            remove_processing_instructions=True
+                                        )
+                                        data.append(html)
+
+                                    writer.writerow(data)
+                                except Exception as e:
+                                    logger.warning(f"Could not extend row in {file}: {e}")
+                                finally:
+                                    progress.advance(single_file_task)
+                        progress.update(single_file_task, total=1, completed=1)
+                    except Exception as e:
+                        logger.warning(f"Could not extend {file}: {e}")
+                    finally:
+                        progress.advance(extending_task)
+                        progress.remove_task(single_file_task)
+
+                executor.submit(partial(_scrape_one, file_nonlocal))
+
+            progress.start_task(extending_task)
+            executor.shutdown(wait=True)
+            progress.remove_task(extending_task)
+
+            logger.info(f"Done! Extended {len(globs)} files.")
 
 
 if __name__ == "__main__":

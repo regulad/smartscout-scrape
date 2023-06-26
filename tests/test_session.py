@@ -111,3 +111,6 @@ class TestSession:
 
 
 __all__ = ("TestSession",)
+
+if __name__ == "__main__":
+    pytest.main()
