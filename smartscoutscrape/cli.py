@@ -305,10 +305,6 @@ def extend(
             # estimate lines
             for file in globs:
                 with file.open("r", newline="", encoding="utf-8") as source_fp:
-                    if file.stat().st_size < 1000:
-                        # this is a stub
-                        continue
-
                     # does juggling with the fp, probably the newline
                     reader = csv.reader(source_fp, dialect="excel")
 
@@ -320,6 +316,9 @@ def extend(
                     line1_length_in_bytes = len(line1.encode("utf-8"))
                     line2_length_in_bytes = len(line2.encode("utf-8"))
                     avg_line_length_in_bytes = (line1_length_in_bytes + line2_length_in_bytes) / 2
+                    if avg_line_length_in_bytes < 1:
+                        # this is a stub
+                        continue
                     file_line_estimate = math.ceil(total_length_in_bytes / avg_line_length_in_bytes)
 
                     total_line_estimate += file_line_estimate
@@ -351,17 +350,16 @@ def extend(
                             # lets get an estimate of how many lines we have to process
                             total_length_in_bytes = file.stat().st_size
 
-                            if file.stat().st_size < 1000:
-                                # this is a stub
-                                progress.update(single_file_task, total=1, completed=1)
-                                return
-
                             source_fp.readline()  # skip the header
                             line1 = source_fp.readline()
                             line2 = source_fp.readline()
                             line1_length_in_bytes = len(line1.encode("utf-8"))
                             line2_length_in_bytes = len(line2.encode("utf-8"))
                             avg_line_length_in_bytes = (line1_length_in_bytes + line2_length_in_bytes) / 2
+                            if avg_line_length_in_bytes < 1:
+                                # this is a stub
+                                progress.update(single_file_task, total=1, completed=1)
+                                return
                             total_lines_estimate = math.ceil(total_length_in_bytes / avg_line_length_in_bytes)
                             progress.update(single_file_task, total=total_lines_estimate, completed=0)
                             # go back to the start
