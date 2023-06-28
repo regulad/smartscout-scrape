@@ -305,6 +305,10 @@ def extend(
             # estimate lines
             for file in globs:
                 with file.open("r", newline="", encoding="utf-8") as source_fp:
+                    if file.stat().st_size < 1000:
+                        # this is a stub
+                        continue
+
                     # does juggling with the fp, probably the newline
                     reader = csv.reader(source_fp, dialect="excel")
 
