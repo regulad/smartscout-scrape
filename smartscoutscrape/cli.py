@@ -24,7 +24,6 @@ from __future__ import annotations
 import csv
 import logging
 import math
-import sys
 import time
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import partial
@@ -109,8 +108,8 @@ def generate(
 
     # fmt: off
     with SmartScoutSession() as session, \
-            Progress() as progress, \
-            ThreadPoolExecutor(thread_name_prefix="CategoryDownloader") as executor:
+        Progress() as progress, \
+        ThreadPoolExecutor(thread_name_prefix="CategoryDownloader") as executor:
         # fmt: on
 
         login_task = progress.add_task("Logging in...", total=None)
@@ -165,7 +164,7 @@ def generate(
 
             # fmt: off
             with open(folder.joinpath(friendly_filename), "w", newline="", encoding="utf-8") as fp, \
-                    product_semaphore:
+                product_semaphore:
                 # fmt: on
                 writer = csv.writer(fp, dialect="excel")  # no close required
 
@@ -266,6 +265,8 @@ def extend(
     log_level_int = cast(int, logging.getLevelName(log_level.upper()))
     logging.basicConfig(level=log_level_int, handlers=[RichHandler()])
 
+    log_level_info_or_higher = log_level_int <= logging.INFO  # check to see if safe to print
+
     if not in_folder.exists():
         raise ValueError(f"Folder {in_folder} does not exist.")
 
@@ -289,17 +290,49 @@ def extend(
         else:
             session = AmazonScrapeSession()
 
+        progress.update(startup_task, total=1, completed=1)
+        progress.remove_task(startup_task)
+
         with session:
-            progress.update(startup_task, total=1, completed=1)
-            progress.remove_task(startup_task)
+            globs: list[Path] = list(in_folder.glob("*.csv"))
+            total_line_estimate = 0
 
-            globs = list(in_folder.glob("*.csv"))
+            row_extension_task = progress.add_task("Extending rows...", total=None, start=False)
+            category_extension_task = progress.add_task(
+                "Extending categories...", total=len(globs), start=False, visible=log_level_info_or_higher
+            )
 
-            extending_task = progress.add_task("Extending data...", total=len(globs))
-            for file_nonlocal in globs:
+            # estimate lines
+            for file in globs:
+                with file.open("r", newline="", encoding="utf-8") as source_fp:
+                    # does juggling with the fp, probably the newline
+                    reader = csv.reader(source_fp, dialect="excel")
+
+                    # lets get an estimate of how many lines we have to process
+                    total_length_in_bytes = file.stat().st_size
+                    source_fp.readline()  # skip the header
+                    line1 = source_fp.readline()
+                    line2 = source_fp.readline()
+                    line1_length_in_bytes = len(line1.encode("utf-8"))
+                    line2_length_in_bytes = len(line2.encode("utf-8"))
+                    avg_line_length_in_bytes = (line1_length_in_bytes + line2_length_in_bytes) / 2
+                    file_line_estimate = math.ceil(total_length_in_bytes / avg_line_length_in_bytes)
+
+                    total_line_estimate += file_line_estimate
+
+                    # go back to the start for the next file
+                    source_fp.seek(0)
+            progress.update(row_extension_task, total=total_line_estimate, completed=0)
+
+            for file in globs:
 
                 def _scrape_one(file: Path) -> None:
-                    single_file_task = progress.add_task(f"Extending {file.name!r}...", total=None, start=False)
+                    single_file_task = progress.add_task(
+                        f"Extending {file.name!r}...",
+                        total=None,
+                        start=False,
+                        visible=log_level_info_or_higher,
+                    )
                     try:
                         if "extended" in file.stem:
                             # we already went to work on this file
@@ -364,19 +397,22 @@ def extend(
                                     logger.warning(f"Could not extend row in {file}: {e}")
                                     continue
                                 finally:
+                                    progress.advance(row_extension_task)
                                     progress.advance(single_file_task)
                         progress.update(single_file_task, total=1, completed=1)
                     except Exception as e:
                         logger.warning(f"Could not extend {file}: {e}")
                     finally:
-                        progress.advance(extending_task)
+                        progress.advance(category_extension_task)
                         progress.remove_task(single_file_task)
 
-                executor.submit(partial(_scrape_one, file_nonlocal))
+                executor.submit(partial(_scrape_one, file))
 
-            progress.start_task(extending_task)
+            progress.start_task(row_extension_task)
+            progress.start_task(category_extension_task)
             executor.shutdown(wait=True)
-            progress.remove_task(extending_task)
+            progress.remove_task(category_extension_task)
+            progress.remove_task(row_extension_task)
 
             logger.info(f"Done! Extended {len(globs)} files.")
 
