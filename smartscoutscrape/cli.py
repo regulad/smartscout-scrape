@@ -87,6 +87,8 @@ def generate(
         folder: The folder to save the CSV file to.
         log_level: The log level to use. Defaults to WARNING.
     """
+    timeout: float = 30.0
+
     if password is None:
         password = typer.prompt("Please enter your password", hide_input=True)
 
@@ -99,7 +101,7 @@ def generate(
     # fmt: off
     with SmartScoutSession(proxy=proxy, threads=threads) as smartscout_session, \
             AmazonScrapeSession(proxy=proxy, threads=threads) as amazon_session, \
-            sqlite3.Connection(database_path) as conn, \
+            sqlite3.Connection(database_path, timeout=timeout) as conn, \
             Progress(
                 TextColumn("[bold cyan]{task.completed}/{task.total}[/bold cyan]"),
                 *Progress.get_default_columns(),
@@ -322,7 +324,7 @@ def generate(
 
             # write in the headers for this file
             progress.start_task(category_local_product_task)
-            with sqlite3.Connection(database_path) as threadlocal_conn:
+            with sqlite3.Connection(database_path, timeout=timeout) as threadlocal_conn:
                 try:
                     for product in smartscout_session.search_products(category_id=category_id):
                         try:
