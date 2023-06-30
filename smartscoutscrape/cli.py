@@ -308,9 +308,6 @@ def extend(
             # estimate lines
             for file in globs:
                 with file.open("r", newline="", encoding="utf-8") as source_fp:
-                    # does juggling with the fp, probably the newline
-                    reader = csv.reader(source_fp, dialect="excel")
-
                     # lets get an estimate of how many lines we have to process
                     total_length_in_bytes = file.stat().st_size
                     source_fp.readline()  # skip the header
@@ -345,9 +342,18 @@ def extend(
                             return
 
                         # fmt: off
-                        with open(file, "r", newline="", encoding="utf-8") as source_fp, \
-                            open(out_folder.joinpath(f"{file.stem}-extended.csv"), "w", newline="",
-                                 encoding="utf-8") as dest_fp:
+                        with file.open("r", newline="", encoding="utf-8", buffering=1, errors="replace") as source_fp, \
+                                (
+                                    out_folder
+                                    .joinpath(f"{file.stem}-extended.csv")
+                                    .open(
+                                        "w",
+                                        newline="",
+                                        encoding="utf-8",
+                                        buffering=1,
+                                        errors="replace"
+                                    )
+                                ) as dest_fp:
                             # fmt: on
 
                             # lets get an estimate of how many lines we have to process
