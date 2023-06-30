@@ -28,6 +28,7 @@ import zlib
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
+from threading import Lock
 from typing import Optional, cast
 
 import minify_html
@@ -76,6 +77,9 @@ def generate(
     database_path: Path = Path("smartscout.db"),
     threads: int = THREADING_SAFE_MAX_WORKERS,
     proxy: Optional[str] = None,
+    dump_html: bool = False,
+    timeout: float = 5.0,
+    skip_init: bool = False,
     log_level: str = "WARNING",
 ) -> None:
     """
@@ -87,7 +91,6 @@ def generate(
         folder: The folder to save the CSV file to.
         log_level: The log level to use. Defaults to WARNING.
     """
-    timeout: float = 30.0
 
     if password is None:
         password = typer.prompt("Please enter your password", hide_input=True)
@@ -98,10 +101,12 @@ def generate(
     if sqlite3.threadsafety < 2:
         raise RuntimeError("sqlite3 is not threadsafe. Please use a different Python version.")
 
+    con_lock = Lock()
+
     # fmt: off
     with SmartScoutSession(proxy=proxy, threads=threads) as smartscout_session, \
             AmazonScrapeSession(proxy=proxy, threads=threads) as amazon_session, \
-            sqlite3.Connection(database_path, timeout=timeout) as conn, \
+            sqlite3.Connection(database_path, timeout=timeout, check_same_thread=False) as conn, \
             Progress(
                 TextColumn("[bold cyan]{task.completed}/{task.total}[/bold cyan]"),
                 *Progress.get_default_columns(),
@@ -121,120 +126,122 @@ def generate(
         category_task = progress.add_task("Getting categories...", total=None)
         categories = smartscout_session.categories()
         progress.update(category_task, total=len(categories))
-        conn.execute("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT)")
-        for category in categories:
-            try:
-                conn.execute("INSERT INTO categories VALUES (?, ?);", (category["id"], category["name"]))
-                conn.commit()
-            except sqlite3.IntegrityError:
-                continue
-            finally:
-                progress.advance(category_task)
+        if not skip_init:
+            conn.execute("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT)")
+            for category in categories:
+                try:
+                    conn.execute("INSERT INTO categories VALUES (?, ?) ON CONFLICT DO NOTHING;", (category["id"], category["name"]))
+                    conn.commit()
+                except sqlite3.IntegrityError:
+                    continue
+                finally:
+                    progress.advance(category_task)
         progress.remove_task(category_task)
 
         # subcategories
         subcategory_task = progress.add_task("Getting subcategories...", total=None)
         subcategories = smartscout_session.subcategories()
         progress.update(subcategory_task, total=len(subcategories))
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS subcategories ("
-            "   'analyticsSearchable' BOOLEAN NULL,"
-            "   'pathById' TEXT NULL,"
-            "   'parentId' INTEGER NULL,"
-            "   'level' INTEGER NULL,"
-            "   'momGrowth' REAL NULL,"
-            "   'momGrowth12' REAL NULL,"
-            "   'numAsins80PctRev' REAL NULL,"
-            "   'rootSubcategoryNodeId' INTEGER NULL,"
-            "   id INTEGER PRIMARY KEY, "
-            "   'subcategoryName' TEXT,"
-            "   'totalMonthlyRevenue' REAL NULL,"
-            "   'totalBrands' INTEGER NULL,"
-            "   'totalAsins' INTEGER NULL,"
-            "   'avgPrice' REAL NULL,"
-            "   'avgReviews' REAL NULL,"
-            "   'avgRating' REAL NULL,"
-            "   'avgNumberSellers' REAL NULL,"
-            "   'avgPageScore' REAL NULL,"
-            "   'avgVolume' REAL NULL,"
-            "   'totalNumberUnitsSold' INTEGER NULL,"
-            "   'totalReviews' INTEGER NULL,"
-            "   'subcategoryContextName' TEXT NULL,"
-            "   'sellerRevenuePct' REAL NULL,"
-            "   'azRevenuePct' REAL NULL,"
-            "   'avgListedSinceDays' REAL NULL,"  # INTEGER
-            "   'ttm' REAL NULL,"
-            "   'isParent' BOOLEAN NULL"
-            ");"
-        )
-        conn.commit()
-        for subcategory in subcategories:
-            try:
-                conn.execute(
-                    "INSERT INTO subcategories VALUES ("
-                    "   :analyticsSearchable,"
-                    "   :pathById,"
-                    "   :parentId,"
-                    "   :level,"
-                    "   :momGrowth,"
-                    "   :momGrowth12,"
-                    "   :numAsins80PctRev,"
-                    "   :rootSubcategoryNodeId,"
-                    "   :id,"
-                    "   :subcategoryName,"
-                    "   :totalMonthlyRevenue,"
-                    "   :totalBrands,"
-                    "   :totalAsins,"
-                    "   :avgPrice,"
-                    "   :avgReviews,"
-                    "   :avgRating,"
-                    "   :avgNumberSellers,"
-                    "   :avgPageScore,"
-                    "   :avgVolume,"
-                    "   :totalNumberUnitsSold,"
-                    "   :totalReviews,"
-                    "   :subcategoryContextName,"
-                    "   :sellerRevenuePct,"
-                    "   :azRevenuePct,"
-                    "   :avgListedSinceDays,"
-                    "   :ttm,"
-                    "   :isParent"
-                    ");",
-                    (
-                        subcategory["analyticsSearchable"],
-                        subcategory["pathById"],
-                        subcategory["parentId"],
-                        subcategory["level"],
-                        subcategory["momGrowth"],
-                        subcategory["momGrowth12"],
-                        subcategory["numAsins80PctRev"],
-                        subcategory["rootSubcategoryNodeId"],
-                        subcategory["id"],
-                        subcategory["subcategoryName"],
-                        subcategory["totalMonthlyRevenue"],
-                        subcategory["totalBrands"],
-                        subcategory["totalAsins"],
-                        subcategory["avgPrice"],
-                        subcategory["avgReviews"],
-                        subcategory["avgRating"],
-                        subcategory["avgNumberSellers"],
-                        subcategory["avgPageScore"],
-                        subcategory["avgVolume"],
-                        subcategory["totalNumberUnitsSold"],
-                        subcategory["totalReviews"],
-                        subcategory["subcategoryContextName"],
-                        subcategory["sellerRevenuePct"],
-                        subcategory["azRevenuePct"],
-                        subcategory["avgListedSinceDays"],
-                        subcategory["ttm"],
-                        subcategory["isParent"],
-                    ),
-                )
-                conn.commit()
-            except sqlite3.IntegrityError:
-                continue
-            finally:
-                progress.advance(subcategory_task)
+        if not skip_init:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS subcategories ("
+                "   'analyticsSearchable' BOOLEAN NULL,"
+                "   'pathById' TEXT NULL,"
+                "   'parentId' INTEGER NULL,"
+                "   'level' INTEGER NULL,"
+                "   'momGrowth' REAL NULL,"
+                "   'momGrowth12' REAL NULL,"
+                "   'numAsins80PctRev' REAL NULL,"
+                "   'rootSubcategoryNodeId' INTEGER NULL,"
+                "   id INTEGER PRIMARY KEY, "
+                "   'subcategoryName' TEXT,"
+                "   'totalMonthlyRevenue' REAL NULL,"
+                "   'totalBrands' INTEGER NULL,"
+                "   'totalAsins' INTEGER NULL,"
+                "   'avgPrice' REAL NULL,"
+                "   'avgReviews' REAL NULL,"
+                "   'avgRating' REAL NULL,"
+                "   'avgNumberSellers' REAL NULL,"
+                "   'avgPageScore' REAL NULL,"
+                "   'avgVolume' REAL NULL,"
+                "   'totalNumberUnitsSold' INTEGER NULL,"
+                "   'totalReviews' INTEGER NULL,"
+                "   'subcategoryContextName' TEXT NULL,"
+                "   'sellerRevenuePct' REAL NULL,"
+                "   'azRevenuePct' REAL NULL,"
+                "   'avgListedSinceDays' REAL NULL,"  # INTEGER
+                "   'ttm' REAL NULL,"
+                "   'isParent' BOOLEAN NULL"
+                ");"
+            )
+            conn.commit()
+            for subcategory in subcategories:
+                try:
+                    conn.execute(
+                        "INSERT INTO subcategories VALUES ("
+                        "   :analyticsSearchable,"
+                        "   :pathById,"
+                        "   :parentId,"
+                        "   :level,"
+                        "   :momGrowth,"
+                        "   :momGrowth12,"
+                        "   :numAsins80PctRev,"
+                        "   :rootSubcategoryNodeId,"
+                        "   :id,"
+                        "   :subcategoryName,"
+                        "   :totalMonthlyRevenue,"
+                        "   :totalBrands,"
+                        "   :totalAsins,"
+                        "   :avgPrice,"
+                        "   :avgReviews,"
+                        "   :avgRating,"
+                        "   :avgNumberSellers,"
+                        "   :avgPageScore,"
+                        "   :avgVolume,"
+                        "   :totalNumberUnitsSold,"
+                        "   :totalReviews,"
+                        "   :subcategoryContextName,"
+                        "   :sellerRevenuePct,"
+                        "   :azRevenuePct,"
+                        "   :avgListedSinceDays,"
+                        "   :ttm,"
+                        "   :isParent"
+                        ") ON CONFLICT DO NOTHING;",
+                        (
+                            subcategory["analyticsSearchable"],
+                            subcategory["pathById"],
+                            subcategory["parentId"],
+                            subcategory["level"],
+                            subcategory["momGrowth"],
+                            subcategory["momGrowth12"],
+                            subcategory["numAsins80PctRev"],
+                            subcategory["rootSubcategoryNodeId"],
+                            subcategory["id"],
+                            subcategory["subcategoryName"],
+                            subcategory["totalMonthlyRevenue"],
+                            subcategory["totalBrands"],
+                            subcategory["totalAsins"],
+                            subcategory["avgPrice"],
+                            subcategory["avgReviews"],
+                            subcategory["avgRating"],
+                            subcategory["avgNumberSellers"],
+                            subcategory["avgPageScore"],
+                            subcategory["avgVolume"],
+                            subcategory["totalNumberUnitsSold"],
+                            subcategory["totalReviews"],
+                            subcategory["subcategoryContextName"],
+                            subcategory["sellerRevenuePct"],
+                            subcategory["azRevenuePct"],
+                            subcategory["avgListedSinceDays"],
+                            subcategory["ttm"],
+                            subcategory["isParent"],
+                        ),
+                    )
+                    conn.commit()
+                except sqlite3.IntegrityError:
+                    continue
+                finally:
+                    progress.advance(subcategory_task)
         progress.remove_task(subcategory_task)
 
         product_count_task = progress.add_task("Getting product count...", total=None)
@@ -326,24 +333,37 @@ def generate(
 
             # write in the headers for this file
             progress.start_task(category_local_product_task)
-            with sqlite3.Connection(database_path, timeout=timeout) as threadlocal_conn:
-                try:
-                    for product in smartscout_session.search_products(category_id=category_id):
-                        try:
-                            asin = product["asin"]
-                            content_type, image_data = smartscout_session.get_product_image(product)
+            try:
+                for product in smartscout_session.search_products(category_id=category_id):
+                    try:
+                        asin = product["asin"]
 
-                            soup = amazon_session.get_asin_html(asin)
-                            description, about, aplus = amazon_session.get_product_info(soup)
+                        # check if we already have this product, fetching data is expensive
+                        with con_lock:
+                            cursor = conn.execute("SELECT * FROM products WHERE asin = ?", (asin,))
+                            if cursor.fetchone() is not None:
+                                continue
+
+                        content_type, image_data = smartscout_session.get_product_image(product)
+
+                        soup = amazon_session.get_asin_html(asin)
+                        description, about, aplus = amazon_session.get_product_info(soup)
+                        if dump_html:
                             minified_html = minify_html.minify(
                                 soup.prettify(encoding="utf-8").decode("utf-8"),
                                 minify_js=True,
                                 minify_css=True,
                             )
                             html_zlib = zlib.compress(minified_html.encode("utf-8"))
+                        else:
+                            html_zlib = b""
 
+                        with con_lock:
+                            # There is no way to have this many connections open at once into an SQLite database,
+                            # so we have to synchronize access to the database.
+                            # It's unfortunate for performance, but it's a neccessary evil.
                             try:
-                                threadlocal_conn.execute(
+                                conn.execute(
                                     "INSERT INTO products VALUES ("
                                     "    :brandId,"
                                     "    :subcategoryId,"
@@ -402,7 +422,7 @@ def generate(
                                     )
                                 )
                                 # image
-                                threadlocal_conn.execute(
+                                conn.execute(
                                     "INSERT INTO product_images VALUES ("
                                     "    :asin,"
                                     "    :content_type,"
@@ -415,7 +435,7 @@ def generate(
                                     )
                                 )
                                 # extension
-                                threadlocal_conn.execute(
+                                conn.execute(
                                     "INSERT INTO product_extensions VALUES ("
                                     "    :asin,"
                                     "    :description,"
@@ -432,20 +452,21 @@ def generate(
                                     )
                                 )
                             except Exception as e:
-                                threadlocal_conn.rollback()
+                                conn.rollback()
+                                conn.commit()  # maybe???
                                 raise e
                             else:
-                                threadlocal_conn.commit()
+                                conn.commit()
                             finally:
                                 progress.advance(category_local_product_task)
                                 progress.advance(product_task)
-                        except Exception as e:
-                            logger.warning(f"Could not get product {product}: {e}")
-                finally:
-                    progress.remove_task(category_local_product_task)
+                    except Exception as e:
+                        logger.warning(f"Could not get product {product}: {e}")
+            finally:
+                progress.remove_task(category_local_product_task)
 
-                    progress.advance(category_task)
-                    categories_done += 1
+                progress.advance(category_task)
+                categories_done += 1
 
         for category in categories:
             category_downloader.submit(partial(_scrape_category, category["id"]))
