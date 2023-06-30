@@ -167,6 +167,7 @@ def generate(
             "   'isParent' BOOLEAN NULL"
             ");"
         )
+        conn.commit()
         for subcategory in subcategories:
             try:
                 conn.execute(
@@ -295,6 +296,7 @@ def generate(
             "   FOREIGN KEY (asin) REFERENCES products(asin)"
             ");"
         )
+        conn.commit()
 
         category_task = progress.add_task("Getting categories...", total=len(categories), visible=False)
         categories_done = 0
