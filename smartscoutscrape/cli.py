@@ -28,13 +28,12 @@ import zlib
 from concurrent.futures.thread import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
-from threading import Lock
 from typing import Optional, cast
 
 import minify_html
 import typer
 from rich.logging import RichHandler
-from rich.progress import Progress
+from rich.progress import Progress, TextColumn
 
 from smartscoutscrape import AmazonScrapeSession, SmartScoutSession, __copyright__, __title__, __version__, metadata
 from smartscoutscrape.utils import THREADING_SAFE_MAX_WORKERS
@@ -94,17 +93,18 @@ def generate(
     log_level_int = cast(int, logging.getLevelName(log_level.upper()))
     logging.basicConfig(level=log_level_int, handlers=[RichHandler()])
 
-    if sqlite3.threadsafety != 3:
+    if sqlite3.threadsafety < 2:
         raise RuntimeError("sqlite3 is not threadsafe. Please use a different Python version.")
-
-    con_lock = Lock()
 
     # fmt: off
     with SmartScoutSession(proxy=proxy, threads=threads) as smartscout_session, \
-        AmazonScrapeSession(proxy=proxy, threads=threads) as amazon_session, \
-        sqlite3.Connection(database_path, check_same_thread=False) as conn, \
-        Progress() as progress, \
-        ThreadPoolExecutor(thread_name_prefix="CategoryDownloader", max_workers=threads) as category_downloader:
+            AmazonScrapeSession(proxy=proxy, threads=threads) as amazon_session, \
+            sqlite3.Connection(database_path) as conn, \
+            Progress(
+                TextColumn("[bold cyan]{task.completed}/{task.total}[/bold cyan]"),
+                *Progress.get_default_columns(),
+            ) as progress, \
+            ThreadPoolExecutor(thread_name_prefix="CategoryDownloader", max_workers=threads) as category_downloader:
         # fmt: on
 
         # We do our own SQLite synchronization, so we don't need it to exclusively be on the same thread
@@ -311,35 +311,35 @@ def generate(
             category_name = category_dict["name"]
 
             log_level_info_or_higher = log_level_int <= logging.INFO  # check to see if safe to print
-            local_task = progress.add_task(
+            category_local_product_task = progress.add_task(
                 f"Downloading category {category_name!r}...",
                 total=None,
                 start=False,
                 visible=log_level_info_or_higher,
             )
             number_of_products = smartscout_session.get_number_of_products(category_id=category_id)
-            progress.update(local_task, total=number_of_products)
+            progress.update(category_local_product_task, total=number_of_products)
 
             # write in the headers for this file
-            progress.start_task(local_task)
-            try:
-                for product in smartscout_session.search_products(category_id=category_id):
-                    try:
-                        asin = product["asin"]
-                        content_type, image_data = smartscout_session.get_product_image(product)
+            progress.start_task(category_local_product_task)
+            with sqlite3.Connection(database_path) as threadlocal_conn:
+                try:
+                    for product in smartscout_session.search_products(category_id=category_id):
+                        try:
+                            asin = product["asin"]
+                            content_type, image_data = smartscout_session.get_product_image(product)
 
-                        soup = amazon_session.get_asin_html(asin)
-                        description, about, aplus = amazon_session.get_product_info(soup)
-                        minified_html = minify_html.minify(
-                            soup.prettify(encoding="utf-8").decode("utf-8"),
-                            minify_js=True,
-                            minify_css=True,
-                        )
-                        html_zlib = zlib.compress(minified_html.encode("utf-8"))
+                            soup = amazon_session.get_asin_html(asin)
+                            description, about, aplus = amazon_session.get_product_info(soup)
+                            minified_html = minify_html.minify(
+                                soup.prettify(encoding="utf-8").decode("utf-8"),
+                                minify_js=True,
+                                minify_css=True,
+                            )
+                            html_zlib = zlib.compress(minified_html.encode("utf-8"))
 
-                        with con_lock:
                             try:
-                                conn.execute(
+                                threadlocal_conn.execute(
                                     "INSERT INTO products VALUES ("
                                     "    :brandId,"
                                     "    :subcategoryId,"
@@ -398,7 +398,7 @@ def generate(
                                     )
                                 )
                                 # image
-                                conn.execute(
+                                threadlocal_conn.execute(
                                     "INSERT INTO product_images VALUES ("
                                     "    :asin,"
                                     "    :content_type,"
@@ -411,7 +411,7 @@ def generate(
                                     )
                                 )
                                 # extension
-                                conn.execute(
+                                threadlocal_conn.execute(
                                     "INSERT INTO product_extensions VALUES ("
                                     "    :asin,"
                                     "    :description,"
@@ -428,17 +428,20 @@ def generate(
                                     )
                                 )
                             except Exception as e:
-                                conn.rollback()
+                                threadlocal_conn.rollback()
                                 raise e
                             else:
-                                conn.commit()
-                    except Exception as e:
-                        logger.warning(f"Could not get product {product}: {e}")
-            finally:
-                progress.remove_task(local_task)
+                                threadlocal_conn.commit()
+                            finally:
+                                progress.advance(category_local_product_task)
+                                progress.advance(product_task)
+                        except Exception as e:
+                            logger.warning(f"Could not get product {product}: {e}")
+                finally:
+                    progress.remove_task(category_local_product_task)
 
-                progress.advance(category_task)
-                categories_done += 1
+                    progress.advance(category_task)
+                    categories_done += 1
 
         for category in categories:
             category_downloader.submit(partial(_scrape_category, category["id"]))
