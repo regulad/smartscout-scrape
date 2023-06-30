@@ -255,12 +255,15 @@ def extend(
     in_folder: Path = Path.cwd().joinpath("smartscout"),
     out_folder: Path = Path.cwd().joinpath("smartscout-extended"),
     use_browser: bool = False,
+    proxy: Optional[str] = None,
+    threads: Optional[int] = None,
     log_level: str = "WARNING",
     dump_html: bool = False,
 ) -> None:
     """
     Extend an existing SmartScout dump with additional fields like descriptions and raw HTML.
     """
+    max_workers = threads or THREADING_SAFE_MAX_WORKERS
 
     log_level_int = cast(int, logging.getLevelName(log_level.upper()))
     logging.basicConfig(level=log_level_int, handlers=[RichHandler()])
@@ -281,14 +284,14 @@ def extend(
     if not in_folder.is_absolute():
         in_folder = in_folder.resolve()
 
-    with Progress() as progress, ThreadPoolExecutor(max_workers=THREADING_SAFE_MAX_WORKERS) as executor:
+    with Progress() as progress, ThreadPoolExecutor(max_workers=max_workers) as executor:
         startup_task = progress.add_task("Starting up...", total=None)
 
         session: AmazonBaseSession
         if use_browser:
-            session = AmazonBrowserSession()
+            session = AmazonBrowserSession(proxy=proxy)
         else:
-            session = AmazonScrapeSession()
+            session = AmazonScrapeSession(proxy=proxy, threads=threads)
 
         progress.update(startup_task, total=1, completed=1)
         progress.remove_task(startup_task)
@@ -328,7 +331,7 @@ def extend(
             progress.update(row_extension_task, total=total_line_estimate, completed=0)
 
             for file in globs:
-
+                # this is not io bound so we do not need a sister thread
                 def _scrape_one(file: Path) -> None:
                     single_file_task = progress.add_task(
                         f"Extending {file.name!r}...",

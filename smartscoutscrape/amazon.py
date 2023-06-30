@@ -163,10 +163,12 @@ class AmazonScrapeSession(AmazonBaseSession):
 
     req: Session
 
-    def __init__(self, proxy: str | None = None) -> None:
+    def __init__(self, proxy: str | None = None, threads: int | None = None) -> None:
         """
         Initialize the session.
         """
+        threads = threads or THREADING_SAFE_MAX_WORKERS
+
         self.req = Session()
 
         self.req.headers["Sec-Ch-Device-Memory"] = "8"
@@ -189,9 +191,7 @@ class AmazonScrapeSession(AmazonBaseSession):
         ] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
         self.req.headers["Viewport-Width"] = "1920"
 
-        adapter = HTTPAdapter(
-            max_retries=3, pool_connections=THREADING_SAFE_MAX_WORKERS, pool_maxsize=THREADING_SAFE_MAX_WORKERS
-        )
+        adapter = HTTPAdapter(max_retries=3, pool_connections=threads, pool_maxsize=threads)
         self.req.mount("https://", adapter)
         self.req.mount("http://", adapter)
 
