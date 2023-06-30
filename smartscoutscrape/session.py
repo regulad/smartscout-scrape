@@ -100,7 +100,9 @@ class SmartScoutSession:
     _category_cache: list[dict] | None
     _sub_category_cache: list[dict] | None
 
-    def __init__(self, marketplace: Marketplace = "US") -> None:
+    def __init__(
+        self, marketplace: Marketplace = "US", proxy: str | None = None, threads: int = THREADING_SAFE_MAX_WORKERS
+    ) -> None:
         self.setup_account = False
         self.refresh_token = None
         self.access_jwt = None
@@ -110,12 +112,12 @@ class SmartScoutSession:
         self._req_id_header = self.random_characters(32)
 
         self.req = Session()
-        adapter = HTTPAdapter(
-            max_retries=3, pool_connections=THREADING_SAFE_MAX_WORKERS, pool_maxsize=THREADING_SAFE_MAX_WORKERS
-        )
+        adapter = HTTPAdapter(max_retries=3, pool_connections=threads, pool_maxsize=threads)
         self.req.mount("https://", adapter)
         self.req.mount("http://", adapter)
         self.req.headers.update(self._headers())
+        if proxy is not None:
+            self.req.proxies.update({"https": proxy, "http": proxy})
 
         self._category_cache = None
         self._sub_category_cache = None
@@ -343,7 +345,7 @@ class SmartScoutSession:
 
     # # Products
 
-    def get_b64_image_from_product(self, product: dict) -> str:
+    def get_product_image(self, product: dict) -> tuple[str, bytes]:
         image_url_id = product["imageUrl"]
 
         if image_url_id.startswith("https://") or image_url_id.startswith("http://"):
@@ -355,13 +357,17 @@ class SmartScoutSession:
             resp.raise_for_status()
 
             image_bytes = resp.content
-
             content_type = resp.headers["Content-Type"]
 
-            base64_bytes = base64.b64encode(image_bytes)
-            base64_string = base64_bytes.decode("utf-8")
+            return content_type, image_bytes
 
-            return f"data:{content_type};base64,{base64_string}"
+    def get_b64_image_from_product(self, product: dict) -> str:
+        content_type, image_bytes = self.get_product_image(product)
+
+        base64_bytes = base64.b64encode(image_bytes)
+        base64_string = base64_bytes.decode("utf-8")
+
+        return f"data:{content_type};base64,{base64_string}"
 
     def _search_products_one_page(
         self,

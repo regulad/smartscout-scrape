@@ -29,7 +29,7 @@ class AmazonBaseSession(metaclass=ABCMeta):
         return f"https://www.amazon.com/dp/{asin}"
 
     @staticmethod
-    def get_product_info(soup: BeautifulSoup) -> tuple[str, ...]:
+    def get_product_info(soup: BeautifulSoup) -> tuple[str | None, ...]:
         """
         Get description, about, and aplus info from the soup.
         """
