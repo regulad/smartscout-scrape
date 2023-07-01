@@ -22,6 +22,22 @@
 
 Lightweight data-extraction & general use library for smartscout.com.
 
+## Proxy
+
+Included is a simple Tailscale configuration that serves a SOCKS5 proxy on your local machine.
+
+Copy the contents of `.env-example` into `.env`, populate the fields and then perform the following command on a machine that has docker installed:
+
+```bash
+docker-compose up -d
+```
+
+Then, you can use the `--proxy` flag to use the proxy.
+
+```bash
+poetry run amzscout-scrape --proxy socks5://localhost:1055
+```
+
 And it’s further described in this paragraph.
 [See the docs 📚](https://smartscout-scrape.readthedocs.io/en/stable/) for more info.
 

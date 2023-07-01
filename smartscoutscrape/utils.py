@@ -58,4 +58,14 @@ def increase_csv_maxlen() -> int:
 increase_csv_maxlen()
 
 
-__all__ = ("dot_access", "THREADING_SAFE_MAX_WORKERS", "increase_csv_maxlen")
+def top_level_dict(input_dict: dict) -> dict:
+    output_dict = dict()
+
+    for key, value in input_dict.items():
+        if not isinstance(value, dict):
+            output_dict[key] = value
+
+    return output_dict
+
+
+__all__ = ("dot_access", "THREADING_SAFE_MAX_WORKERS", "increase_csv_maxlen", "top_level_dict")

@@ -33,11 +33,21 @@ from typing import Optional, cast
 
 import minify_html
 import typer
+from requests import HTTPError
 from rich.logging import RichHandler
 from rich.progress import Progress, TextColumn
 
 from smartscoutscrape import AmazonScrapeSession, SmartScoutSession, __copyright__, __title__, __version__, metadata
-from smartscoutscrape.utils import THREADING_SAFE_MAX_WORKERS
+from smartscoutscrape.utils import THREADING_SAFE_MAX_WORKERS, top_level_dict
+
+using_python_profiler = False
+try:
+    import cProfile as profile
+except ImportError:
+    using_python_profiler = True
+    import profile
+
+import pstats
 
 # fmt: on
 
@@ -77,9 +87,10 @@ def generate(
     database_path: Path = Path("smartscout.db"),
     threads: int = THREADING_SAFE_MAX_WORKERS,
     proxy: Optional[str] = None,
-    dump_html: bool = False,
+    extend: bool = False,  # impossibly slow
+    images: bool = True,
+    dump_html: bool = False,  # impossibly space-consuming
     timeout: float = 5.0,
-    skip_init: bool = False,
     log_level: str = "WARNING",
 ) -> None:
     """
@@ -88,23 +99,35 @@ def generate(
     Args:
         username: Your SmartScout username.
         password: Your SmartScout password. If not provided, you will be prompted.
-        folder: The folder to save the CSV file to.
-        log_level: The log level to use. Defaults to WARNING.
+        database_path: Path to the database file.
+        threads: Number of threads to use.
+        proxy: Proxy to use, i.e. socks5://localhost:1055
+        extend: Extend the database with extra columns like amazon description & images. WARNING: This is impossibly slow, and is likely to get your IP banned by Amazon.
+        images: Fetch images.
+        log_level: Log level.
+        dump_html: If HTML data should be dumped along with the extension data. Enabling this also enables extend.
+        timeout: Amount of time to wait if data does not return instantly
     """
+    if dump_html:
+        extend = True
 
     if password is None:
         password = typer.prompt("Please enter your password", hide_input=True)
 
     log_level_int = cast(int, logging.getLevelName(log_level.upper()))
+    log_level_info_or_higher = log_level_int <= logging.INFO  # check to see if safe to print
+    log_level_debug_or_higher = log_level_int <= logging.DEBUG  # check to see if safe to print
     logging.basicConfig(level=log_level_int, handlers=[RichHandler()])
 
     if sqlite3.threadsafety < 2:
         raise RuntimeError("sqlite3 is not threadsafe. Please use a different Python version.")
 
+    startup_lock = Lock()
     con_lock = Lock()
 
     # fmt: off
-    with SmartScoutSession(proxy=proxy, threads=threads) as smartscout_session, \
+    with profile.Profile() as pr, \
+            SmartScoutSession(proxy=proxy, threads=threads) as smartscout_session, \
             AmazonScrapeSession(proxy=proxy, threads=threads) as amazon_session, \
             sqlite3.Connection(database_path, timeout=timeout, check_same_thread=False) as conn, \
             Progress(
@@ -113,6 +136,13 @@ def generate(
             ) as progress, \
             ThreadPoolExecutor(thread_name_prefix="CategoryDownloader", max_workers=threads) as category_downloader:
         # fmt: on
+
+        # calibrate profiler
+        if using_python_profiler:
+            calibration_task = progress.add_task("Calibrating...", total=5)
+            for _ in progress.track(range(5), 5, task_id=calibration_task):
+                pr.calibrate(10000)
+            progress.remove_task(calibration_task)
 
         # We do our own SQLite synchronization, so we don't need it to exclusively be on the same thread
 
@@ -126,130 +156,162 @@ def generate(
         category_task = progress.add_task("Getting categories...", total=None)
         categories = smartscout_session.categories()
         progress.update(category_task, total=len(categories))
-        if not skip_init:
-            conn.execute("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT)")
-            for category in categories:
-                try:
-                    conn.execute("INSERT INTO categories VALUES (?, ?) ON CONFLICT DO NOTHING;", (category["id"], category["name"]))
-                    conn.commit()
-                except sqlite3.IntegrityError:
-                    continue
-                finally:
-                    progress.advance(category_task)
+        conn.execute("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT)")
+        for category in categories:
+            try:
+                conn.execute(
+                    "INSERT INTO categories VALUES (:id, :name) ON CONFLICT (id) DO UPDATE SET (name) = (:name);",
+                    category
+                )
+            except Exception as e:
+                conn.rollback()
+                raise e
+            finally:
+                progress.advance(category_task)
+        conn.commit()
+
         progress.remove_task(category_task)
 
         # subcategories
         subcategory_task = progress.add_task("Getting subcategories...", total=None)
         subcategories = smartscout_session.subcategories()
         progress.update(subcategory_task, total=len(subcategories))
-        if not skip_init:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS subcategories ("
-                "   'analyticsSearchable' BOOLEAN NULL,"
-                "   'pathById' TEXT NULL,"
-                "   'parentId' INTEGER NULL,"
-                "   'level' INTEGER NULL,"
-                "   'momGrowth' REAL NULL,"
-                "   'momGrowth12' REAL NULL,"
-                "   'numAsins80PctRev' REAL NULL,"
-                "   'rootSubcategoryNodeId' INTEGER NULL,"
-                "   id INTEGER PRIMARY KEY, "
-                "   'subcategoryName' TEXT,"
-                "   'totalMonthlyRevenue' REAL NULL,"
-                "   'totalBrands' INTEGER NULL,"
-                "   'totalAsins' INTEGER NULL,"
-                "   'avgPrice' REAL NULL,"
-                "   'avgReviews' REAL NULL,"
-                "   'avgRating' REAL NULL,"
-                "   'avgNumberSellers' REAL NULL,"
-                "   'avgPageScore' REAL NULL,"
-                "   'avgVolume' REAL NULL,"
-                "   'totalNumberUnitsSold' INTEGER NULL,"
-                "   'totalReviews' INTEGER NULL,"
-                "   'subcategoryContextName' TEXT NULL,"
-                "   'sellerRevenuePct' REAL NULL,"
-                "   'azRevenuePct' REAL NULL,"
-                "   'avgListedSinceDays' REAL NULL,"  # INTEGER
-                "   'ttm' REAL NULL,"
-                "   'isParent' BOOLEAN NULL"
-                ");"
-            )
-            conn.commit()
-            for subcategory in subcategories:
-                try:
-                    conn.execute(
-                        "INSERT INTO subcategories VALUES ("
-                        "   :analyticsSearchable,"
-                        "   :pathById,"
-                        "   :parentId,"
-                        "   :level,"
-                        "   :momGrowth,"
-                        "   :momGrowth12,"
-                        "   :numAsins80PctRev,"
-                        "   :rootSubcategoryNodeId,"
-                        "   :id,"
-                        "   :subcategoryName,"
-                        "   :totalMonthlyRevenue,"
-                        "   :totalBrands,"
-                        "   :totalAsins,"
-                        "   :avgPrice,"
-                        "   :avgReviews,"
-                        "   :avgRating,"
-                        "   :avgNumberSellers,"
-                        "   :avgPageScore,"
-                        "   :avgVolume,"
-                        "   :totalNumberUnitsSold,"
-                        "   :totalReviews,"
-                        "   :subcategoryContextName,"
-                        "   :sellerRevenuePct,"
-                        "   :azRevenuePct,"
-                        "   :avgListedSinceDays,"
-                        "   :ttm,"
-                        "   :isParent"
-                        ") ON CONFLICT DO NOTHING;",
-                        (
-                            subcategory["analyticsSearchable"],
-                            subcategory["pathById"],
-                            subcategory["parentId"],
-                            subcategory["level"],
-                            subcategory["momGrowth"],
-                            subcategory["momGrowth12"],
-                            subcategory["numAsins80PctRev"],
-                            subcategory["rootSubcategoryNodeId"],
-                            subcategory["id"],
-                            subcategory["subcategoryName"],
-                            subcategory["totalMonthlyRevenue"],
-                            subcategory["totalBrands"],
-                            subcategory["totalAsins"],
-                            subcategory["avgPrice"],
-                            subcategory["avgReviews"],
-                            subcategory["avgRating"],
-                            subcategory["avgNumberSellers"],
-                            subcategory["avgPageScore"],
-                            subcategory["avgVolume"],
-                            subcategory["totalNumberUnitsSold"],
-                            subcategory["totalReviews"],
-                            subcategory["subcategoryContextName"],
-                            subcategory["sellerRevenuePct"],
-                            subcategory["azRevenuePct"],
-                            subcategory["avgListedSinceDays"],
-                            subcategory["ttm"],
-                            subcategory["isParent"],
-                        ),
-                    )
-                    conn.commit()
-                except sqlite3.IntegrityError:
-                    continue
-                finally:
-                    progress.advance(subcategory_task)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS subcategories ("
+            "   'analyticsSearchable' BOOLEAN NULL,"
+            "   'pathById' TEXT NULL,"
+            "   'parentId' INTEGER NULL,"
+            "   'level' INTEGER NULL,"
+            "   'momGrowth' REAL NULL,"
+            "   'momGrowth12' REAL NULL,"
+            "   'numAsins80PctRev' REAL NULL,"
+            "   'rootSubcategoryNodeId' INTEGER NULL,"
+            "   id INTEGER PRIMARY KEY, "
+            "   'subcategoryName' TEXT,"
+            "   'totalMonthlyRevenue' REAL NULL,"
+            "   'totalBrands' INTEGER NULL,"
+            "   'totalAsins' INTEGER NULL,"
+            "   'avgPrice' REAL NULL,"
+            "   'avgReviews' REAL NULL,"
+            "   'avgRating' REAL NULL,"
+            "   'avgNumberSellers' REAL NULL,"
+            "   'avgPageScore' REAL NULL,"
+            "   'avgVolume' REAL NULL,"
+            "   'totalNumberUnitsSold' INTEGER NULL,"
+            "   'totalReviews' INTEGER NULL,"
+            "   'subcategoryContextName' TEXT NULL,"
+            "   'sellerRevenuePct' REAL NULL,"
+            "   'azRevenuePct' REAL NULL,"
+            "   'avgListedSinceDays' REAL NULL,"  # INTEGER
+            "   'ttm' REAL NULL,"
+            "   'isParent' BOOLEAN NULL"
+            ");"
+        )
+        for subcategory in subcategories:
+            try:
+                conn.execute(
+                    "INSERT INTO subcategories VALUES ("
+                    "   :analyticsSearchable,"
+                    "   :pathById,"
+                    "   :parentId,"
+                    "   :level,"
+                    "   :momGrowth,"
+                    "   :momGrowth12,"
+                    "   :numAsins80PctRev,"
+                    "   :rootSubcategoryNodeId,"
+                    "   :id,"
+                    "   :subcategoryName,"
+                    "   :totalMonthlyRevenue,"
+                    "   :totalBrands,"
+                    "   :totalAsins,"
+                    "   :avgPrice,"
+                    "   :avgReviews,"
+                    "   :avgRating,"
+                    "   :avgNumberSellers,"
+                    "   :avgPageScore,"
+                    "   :avgVolume,"
+                    "   :totalNumberUnitsSold,"
+                    "   :totalReviews,"
+                    "   :subcategoryContextName,"
+                    "   :sellerRevenuePct,"
+                    "   :azRevenuePct,"
+                    "   :avgListedSinceDays,"
+                    "   :ttm,"
+                    "   :isParent"
+                    ") ON CONFLICT (id) DO UPDATE SET ("
+                    "   'analyticsSearchable',"
+                    "   'pathById',"
+                    "   'parentId',"
+                    "   'level',"
+                    "   'momGrowth',"
+                    "   'momGrowth12',"
+                    "   'numAsins80PctRev',"
+                    "   'rootSubcategoryNodeId',"
+                    "   'subcategoryName',"
+                    "   'totalMonthlyRevenue',"
+                    "   'totalBrands',"
+                    "   'totalAsins',"
+                    "   'avgPrice',"
+                    "   'avgReviews',"
+                    "   'avgRating',"
+                    "   'avgNumberSellers',"
+                    "   'avgPageScore',"
+                    "   'avgVolume',"
+                    "   'totalNumberUnitsSold',"
+                    "   'totalReviews',"
+                    "   'subcategoryContextName',"
+                    "   'sellerRevenuePct',"
+                    "   'azRevenuePct',"
+                    "   'avgListedSinceDays',"
+                    "   'ttm',"
+                    "   'isParent'"
+                    ") = ("
+                    "   :analyticsSearchable,"
+                    "   :pathById,"
+                    "   :parentId,"
+                    "   :level,"
+                    "   :momGrowth,"
+                    "   :momGrowth12,"
+                    "   :numAsins80PctRev,"
+                    "   :rootSubcategoryNodeId,"
+                    "   :subcategoryName,"
+                    "   :totalMonthlyRevenue,"
+                    "   :totalBrands,"
+                    "   :totalAsins,"
+                    "   :avgPrice,"
+                    "   :avgReviews,"
+                    "   :avgRating,"
+                    "   :avgNumberSellers,"
+                    "   :avgPageScore,"
+                    "   :avgVolume,"
+                    "   :totalNumberUnitsSold,"
+                    "   :totalReviews,"
+                    "   :subcategoryContextName,"
+                    "   :sellerRevenuePct,"
+                    "   :azRevenuePct,"
+                    "   :avgListedSinceDays,"
+                    "   :ttm,"
+                    "   :isParent"
+                    ");",
+                    top_level_dict(subcategory),
+                )
+            except Exception as e:
+                conn.rollback()
+                raise e
+            finally:
+                progress.advance(subcategory_task)
+        conn.commit()
+
         progress.remove_task(subcategory_task)
 
-        product_count_task = progress.add_task("Getting product count...", total=None)
+        product_task = progress.add_task("Downloading products...", total=None, start=False)
+
+        product_count_task = progress.add_task("Getting product count...", total=None, visible=False)
         total_products = smartscout_session.get_total_number_of_products()
         progress.update(product_count_task, total=1, completed=1)
+        progress.update(product_task, total=total_products)
         progress.remove_task(product_count_task)
-
-        product_task = progress.add_task("Downloading products...", total=total_products, start=False)
+        total_products_seen_so_far = 0
 
         # create the table
         # products
@@ -288,8 +350,8 @@ def generate(
         conn.execute(
             "CREATE TABLE IF NOT EXISTS product_images ("
             "   'asin' TEXT PRIMARY KEY,"
-            "   'content_type' TEXT NOT NULL,"
-            "   'image' BLOB NOT NULL,"
+            "   'content_type' TEXT NULL,"
+            "   'image' BLOB NULL,"
             "   FOREIGN KEY (asin) REFERENCES products(asin)"
             ");",
         )
@@ -299,17 +361,16 @@ def generate(
             "   'description' TEXT NULL,"
             "   'about' TEXT NULL,"
             "   'aplus' TEXT NULL,"
-            "   'html_zlib' BLOB NOT NULL,"  # compressed html with zlib
+            "   'html_zlib' BLOB NULL,"  # compressed html with zlib
             "   FOREIGN KEY (asin) REFERENCES products(asin)"
             ");"
         )
         conn.commit()
 
         category_task = progress.add_task("Getting categories...", total=len(categories), visible=False)
-        categories_done = 0
 
         def _scrape_category(category_id: int) -> None:
-            nonlocal categories_done
+            nonlocal total_products_seen_so_far
 
             category_dict: dict | None = None
             for category in categories:
@@ -321,7 +382,6 @@ def generate(
 
             category_name = category_dict["name"]
 
-            log_level_info_or_higher = log_level_int <= logging.INFO  # check to see if safe to print
             category_local_product_task = progress.add_task(
                 f"Downloading category {category_name!r}...",
                 total=None,
@@ -331,32 +391,71 @@ def generate(
             number_of_products = smartscout_session.get_number_of_products(category_id=category_id)
             progress.update(category_local_product_task, total=number_of_products)
 
+            with startup_lock:
+                total_products_seen_so_far += number_of_products
+                if total_products_seen_so_far > total_products:
+                    progress.update(product_task, total=total_products_seen_so_far)
+
             # write in the headers for this file
             progress.start_task(category_local_product_task)
             try:
-                for product in smartscout_session.search_products(category_id=category_id):
+                for i, product in enumerate(smartscout_session.search_products(category_id=category_id)):
+                    if log_level_debug_or_higher and i > 1:
+                        break  # only do 10 products in debug mode
                     try:
                         asin = product["asin"]
 
-                        # check if we already have this product, fetching data is expensive
-                        with con_lock:
-                            cursor = conn.execute("SELECT * FROM products WHERE asin = ?", (asin,))
-                            if cursor.fetchone() is not None:
-                                continue
+                        # image
+                        content_type: str | None = None
+                        image_data: bytes | None = None
 
-                        content_type, image_data = smartscout_session.get_product_image(product)
+                        image_url: str | None = product["imageUrl"]
+                        if images and image_url is not None:
+                            try:
+                                content_type, image_data = smartscout_session.get_product_image(product)
+                            except HTTPError as e:
+                                if e.response.status_code == 404 or e.response.status_code == 400:
+                                    pass
+                                else:
+                                    raise e
 
-                        soup = amazon_session.get_asin_html(asin)
-                        description, about, aplus = amazon_session.get_product_info(soup)
-                        if dump_html:
-                            minified_html = minify_html.minify(
-                                soup.prettify(encoding="utf-8").decode("utf-8"),
-                                minify_js=True,
-                                minify_css=True,
-                            )
-                            html_zlib = zlib.compress(minified_html.encode("utf-8"))
-                        else:
-                            html_zlib = b""
+                        # previously smartscout-scrape extend
+                        extend_this_row: bool = extend
+
+                        description: str | None = None
+                        about: str | None = None
+                        aplus: str | None = None
+                        html_zlib: bytes | None = None
+                        if extend:
+                            try:
+                                soup = amazon_session.get_asin_html(asin)
+                                beautiful = soup.prettify(encoding="utf-8").decode("utf-8")
+
+                                if "Sorry, we just need to make sure you're not a robot." in beautiful:
+                                    logger.warning("Amazon is asking for a captcha. Please try again later.")
+                                    # don't commit changes to extend DB this row because it's not real
+                                    extend_this_row = False
+                                    pass
+
+                                description, about, aplus = amazon_session.get_product_info(soup)
+
+                                if dump_html:
+                                    minified_html = minify_html.minify(
+                                        beautiful,
+                                        minify_js=True,
+                                        minify_css=True,
+                                    )
+                                    html_zlib = zlib.compress(minified_html.encode("utf-8"))
+                                else:
+                                    html_zlib = None
+                            except HTTPError as e:
+                                if e.response.status_code == 404:
+                                    pass
+                                else:
+                                    raise e
+
+                        db_friendly_copy_of_product = product.copy()
+                        db_friendly_copy_of_product["subcategoryName"] = product["subcategory"]["subcategoryName"]
 
                         with con_lock:
                             # There is no way to have this many connections open at once into an SQLite database,
@@ -391,69 +490,133 @@ def generate(
                                     "    :productPageScore,"
                                     "    :manufacturer,"
                                     "    :upc"
+                                    ") ON CONFLICT (asin) DO UPDATE SET ("
+                                    "    brandId,"
+                                    "    subcategoryId,"
+                                    "    brandName,"
+                                    "    categoryId,"
+                                    "    subcategoryName,"
+                                    "    rank,"
+                                    "    amazonIsr,"
+                                    "    numberOfSellers,"
+                                    "    isVariation,"
+                                    "    monthlyRevenueEstimate,"
+                                    "    ttm,"
+                                    "    monthlyUnitsSold,"
+                                    "    listedSince,"
+                                    "    reviewCount,"
+                                    "    reviewRating,"
+                                    "    numberFbaSellers,"
+                                    "    buyBoxPrice,"
+                                    "    averageBuyBoxPrice,"
+                                    "    buyBoxEquity,"
+                                    "    revenueEquity,"
+                                    "    marginEquity,"
+                                    "    outOfStockNow,"
+                                    "    productPageScore,"
+                                    "    manufacturer,"
+                                    "    upc"
+                                    ") = ("
+                                    "    :brandId,"
+                                    "    :subcategoryId,"
+                                    "    :brandName,"
+                                    "    :categoryId,"
+                                    "    :subcategoryName,"
+                                    "    :rank,"
+                                    "    :amazonIsr,"
+                                    "    :numberOfSellers,"
+                                    "    :isVariation,"
+                                    "    :monthlyRevenueEstimate,"
+                                    "    :ttm,"
+                                    "    :monthlyUnitsSold,"
+                                    "    :listedSince,"
+                                    "    :reviewCount,"
+                                    "    :reviewRating,"
+                                    "    :numberFbaSellers,"
+                                    "    :buyBoxPrice,"
+                                    "    :averageBuyBoxPrice,"
+                                    "    :buyBoxEquity,"
+                                    "    :revenueEquity,"
+                                    "    :marginEquity,"
+                                    "    :outOfStockNow,"
+                                    "    :productPageScore,"
+                                    "    :manufacturer,"
+                                    "    :upc"
                                     ")",
-                                    (
-                                        product["brandId"],
-                                        product["subcategoryId"],
-                                        product["asin"],
-                                        product["brandName"],
-                                        product["categoryId"],
-                                        product["subcategory"]["subcategoryName"],
-                                        product["rank"],
-                                        product["amazonIsr"],
-                                        product["numberOfSellers"],
-                                        product["isVariation"],
-                                        product["monthlyRevenueEstimate"],
-                                        product["ttm"],
-                                        product["monthlyUnitsSold"],
-                                        product["listedSince"],
-                                        product["reviewCount"],
-                                        product["reviewRating"],
-                                        product["numberFbaSellers"],
-                                        product["buyBoxPrice"],
-                                        product["averageBuyBoxPrice"],
-                                        product["buyBoxEquity"],
-                                        product["revenueEquity"],
-                                        product["marginEquity"],
-                                        product["outOfStockNow"],
-                                        product["productPageScore"],
-                                        product["manufacturer"],
-                                        product["upc"],
-                                    )
+                                    top_level_dict(db_friendly_copy_of_product)
                                 )
                                 # image
-                                conn.execute(
-                                    "INSERT INTO product_images VALUES ("
-                                    "    :asin,"
-                                    "    :content_type,"
-                                    "    :image"
-                                    ")",
-                                    (
-                                        asin,
-                                        content_type,
-                                        image_data,
+                                if images:
+                                    conn.execute(
+                                        "INSERT INTO product_images VALUES ("
+                                        "    :asin,"
+                                        "    :content_type,"
+                                        "    :image"
+                                        ") ON CONFLICT (asin) DO UPDATE SET ("
+                                        "   content_type,"
+                                        "   image"
+                                        ") = ("
+                                        "   :content_type,"
+                                        "   :image"
+                                        ")",
+                                        {
+                                            "asin": asin,
+                                            "content_type": content_type,
+                                            "image": image_data,
+                                        }
                                     )
-                                )
                                 # extension
-                                conn.execute(
-                                    "INSERT INTO product_extensions VALUES ("
-                                    "    :asin,"
-                                    "    :description,"
-                                    "    :about,"
-                                    "    :aplus,"
-                                    "    :html_zlib"
-                                    ")",
-                                    (
-                                        asin,
-                                        description,
-                                        about,
-                                        aplus,
-                                        html_zlib,
-                                    )
-                                )
+                                if extend_this_row:
+                                    extension_dict = {
+                                        "asin": asin,
+                                        "description": description,
+                                        "about": about,
+                                        "aplus": aplus,
+                                        "html_zlib": html_zlib,
+                                    }
+                                    if not dump_html:
+                                        # we aren't dumping HTML this run. Don't touch the HTML if it exists.
+                                        conn.execute(
+                                            "INSERT INTO product_extensions VALUES ("
+                                            "    :asin,"
+                                            "    :description,"
+                                            "    :about,"
+                                            "    :aplus,"
+                                            "    :html_zlib"
+                                            ") ON CONFLICT (asin) DO UPDATE SET ("
+                                            "   description,"
+                                            "   about,"
+                                            "   aplus"
+                                            ") = ("
+                                            "   :description,"
+                                            "   :about,"
+                                            "   :aplus"
+                                            ")",
+                                            extension_dict
+                                        )
+                                    else:
+                                        conn.execute(
+                                            "INSERT INTO product_extensions VALUES ("
+                                            "    :asin,"
+                                            "    :description,"
+                                            "    :about,"
+                                            "    :aplus,"
+                                            "    :html_zlib"
+                                            ") ON CONFLICT (asin) DO UPDATE SET ("
+                                            "   description,"
+                                            "   about,"
+                                            "   aplus,"
+                                            "   html_zlib"
+                                            ") = ("
+                                            "   :description,"
+                                            "   :about,"
+                                            "   :aplus,"
+                                            "   :html_zlib"
+                                            ")",
+                                            extension_dict
+                                        )
                             except Exception as e:
                                 conn.rollback()
-                                conn.commit()  # maybe???
                                 raise e
                             else:
                                 conn.commit()
@@ -464,18 +627,21 @@ def generate(
                         logger.warning(f"Could not get product {product}: {e}")
             finally:
                 progress.remove_task(category_local_product_task)
-
                 progress.advance(category_task)
-                categories_done += 1
 
         for category in categories:
             category_downloader.submit(partial(_scrape_category, category["id"]))
 
         progress.start_task(category_task)
         progress.start_task(product_task)
-        while categories_done < len(categories):
-            time.sleep(0.1)
-
+        try:
+            category_downloader.shutdown(wait=True)
+        finally:
+            if log_level_debug_or_higher:
+                pr.create_stats()
+                stats = pstats.Stats(pr)
+                stats.sort_stats(pstats.SortKey.CUMULATIVE)
+                stats.print_stats(.05)
         progress.remove_task(category_task)
 
         logger.info(f"Done!")

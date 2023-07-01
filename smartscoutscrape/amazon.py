@@ -1,4 +1,5 @@
 import os
+import random
 import time
 from abc import ABCMeta
 from threading import Lock
@@ -162,6 +163,8 @@ class AmazonScrapeSession(AmazonBaseSession):
     """
 
     req: Session
+    req_lock: Lock
+    last_req_time: float
 
     def __init__(self, proxy: str | None = None, threads: int | None = None) -> None:
         """
@@ -195,12 +198,24 @@ class AmazonScrapeSession(AmazonBaseSession):
         self.req.mount("https://", adapter)
         self.req.mount("http://", adapter)
 
+        self.req_lock = Lock()
+
         if proxy is not None:
-            proxies = {"http": proxy, "https": proxy}
-            self.req.proxies.update(proxies)
+            self.req.proxies.update({"http": proxy, "https": proxy})
+
+        # setup cookies
+        self.req.get("https://www.amazon.com")
+        self.last_req_time = time.time()
 
     def get_asin_html(self, asin: str) -> BeautifulSoup:
-        with self.req.get(self.get_url_asin(asin)) as resp:
+        with self.req_lock:
+            time_since_last_req = time.time() - self.last_req_time
+            time_to_wait = random.uniform(0.5, 1.5)
+            if time_since_last_req < time_to_wait:
+                time.sleep(time_to_wait - time_since_last_req)
+            resp = self.req.get(self.get_url_asin(asin))
+            self.last_req_time = time.time()
+        with resp:
             resp.raise_for_status()
             return BeautifulSoup(resp.text, "html.parser")
 
