@@ -209,6 +209,7 @@ def generate(
             "   'isParent' BOOLEAN NULL"
             ");"
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS subcategories_parentId ON subcategories(parentId);")
         for subcategory in subcategories:
             try:
                 conn.execute(
@@ -358,6 +359,10 @@ def generate(
             "   FOREIGN KEY (categoryId) REFERENCES categories(id)"
             ");",
         )
+        # we do a lot of queries on the categoryId and subcategoryId, so we index them
+        conn.execute("CREATE INDEX IF NOT EXISTS products_categoryId ON products(categoryId);")
+        conn.execute("CREATE INDEX IF NOT EXISTS products_subcategoryId ON products(subcategoryId);")
+        # images
         conn.execute(
             "CREATE TABLE IF NOT EXISTS product_images ("
             "   'asin' TEXT PRIMARY KEY,"
@@ -366,6 +371,7 @@ def generate(
             "   FOREIGN KEY (asin) REFERENCES products(asin)"
             ");",
         )
+        # extensions
         conn.execute(
             "CREATE TABLE IF NOT EXISTS product_extensions ("
             "   'asin' TEXT PRIMARY KEY,"
