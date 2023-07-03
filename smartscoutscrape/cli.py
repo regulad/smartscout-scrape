@@ -446,17 +446,10 @@ def generate(
                         if extend:
                             try:
                                 soup = amazon_session.get_asin_html(asin)
-                                beautiful = soup.prettify(encoding="utf-8").decode("utf-8")
-
-                                if "Sorry, we just need to make sure you're not a robot." in beautiful:
-                                    logger.warning("Amazon is asking for a captcha. Please try again later.")
-                                    # don't commit changes to extend DB this row because it's not real
-                                    extend_this_row = False
-                                    pass
-
                                 description, about, aplus = amazon_session.get_product_info(soup)
 
                                 if dump_html:
+                                    beautiful = soup.prettify(encoding="utf-8").decode("utf-8")
                                     minified_html = minify_html.minify(
                                         beautiful,
                                         minify_js=True,
@@ -466,10 +459,10 @@ def generate(
                                 else:
                                     html_zlib = None
                             except HTTPError as e:
-                                if e.response.status_code == 404:
-                                    pass
-                                else:
-                                    raise e
+                                if e.response.status_code != 404 and e.response.status_code != 400:
+                                    logger.warning(f"Failed to get HTML for ASIN {asin}: {e}")
+                                extend_this_row = False
+                                pass
 
                         db_friendly_copy_of_product = product.copy()
                         db_friendly_copy_of_product["subcategoryName"] = product["subcategory"]["subcategoryName"]

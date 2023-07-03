@@ -8,6 +8,7 @@ from typing import Self
 from bs4 import BeautifulSoup
 from requests import Session
 from requests.adapters import HTTPAdapter
+from requests.exceptions import HTTPError
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.chrome.webdriver import WebDriver as ChromeDriver
 from selenium.webdriver.support.wait import WebDriverWait
@@ -162,6 +163,8 @@ class AmazonScrapeSession(AmazonBaseSession):
     While this is more efficient than the browser session, it is also more likely to get you IP blocked.
     """
 
+    WAIT_TIME_SECONDS: float = 30.0
+
     req: Session
     req_lock: Lock
     last_req_time: float
@@ -210,14 +213,18 @@ class AmazonScrapeSession(AmazonBaseSession):
     def get_asin_html(self, asin: str) -> BeautifulSoup:
         with self.req_lock:
             time_since_last_req = time.time() - self.last_req_time
-            time_to_wait = random.uniform(0.5, 1.5)
+            time_to_wait = random.uniform(self.WAIT_TIME_SECONDS * 0.8, self.WAIT_TIME_SECONDS * 1.2)
             if time_since_last_req < time_to_wait:
                 time.sleep(time_to_wait - time_since_last_req)
             resp = self.req.get(self.get_url_asin(asin))
             self.last_req_time = time.time()
         with resp:
             resp.raise_for_status()
-            return BeautifulSoup(resp.text, "html.parser")
+            text = resp.text
+            if "Sorry, we just need to make sure you're not a robot." in text:
+                raise HTTPError("Amazon is asking for a captcha.")
+            soup = BeautifulSoup(text, "html.parser")
+            return soup
 
 
 __all__ = ("AmazonBrowserSession", "AmazonBaseSession", "AmazonScrapeSession")
