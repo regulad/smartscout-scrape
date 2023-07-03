@@ -99,7 +99,6 @@ smartscout-scrape = "smartscoutscrape.cli:cli"
 python = "^3.11"
 typer = { version = "^0.9.0", extras = ["all"] }
 requests = "^2.31.0"
-b64 = "^0.4"
 undetected-chromedriver = "^3.5.0"
 selenium = "^4.10.0"
 rich = "^13.4.2"

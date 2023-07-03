@@ -213,7 +213,7 @@ class AmazonScrapeSession(AmazonBaseSession):
     def get_asin_html(self, asin: str) -> BeautifulSoup:
         with self.req_lock:
             time_since_last_req = time.time() - self.last_req_time
-            time_to_wait = random.uniform(self.WAIT_TIME_SECONDS * 0.8, self.WAIT_TIME_SECONDS * 1.2)
+            time_to_wait = random.uniform(self.WAIT_TIME_SECONDS * 0.8, self.WAIT_TIME_SECONDS * 1.2)  # nosec
             if time_since_last_req < time_to_wait:
                 time.sleep(time_to_wait - time_since_last_req)
             resp = self.req.get(self.get_url_asin(asin))

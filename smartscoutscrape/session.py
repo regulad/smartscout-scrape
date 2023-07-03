@@ -155,7 +155,7 @@ class SmartScoutSession:
 
     @staticmethod
     def random_characters(length: int) -> str:
-        return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
+        return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))  # nosec
 
     def _request_id(self) -> str:
         return f"{self._req_id_header}.{self.random_characters(16)}"

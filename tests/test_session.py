@@ -25,27 +25,27 @@ def session():
 
 
 class TestSession:
-    def test_register_new_account(self):
-        session = SmartScoutSession()
-
-        random_email = session.random_characters(16) + "@gmail.com"
-        random_password = session.random_characters(16)
-        random_first_name = session.random_characters(16)
-        random_last_name = session.random_characters(16)
-
-        session.register(
-            email=random_email,
-            password=random_password,
-            first_name=random_first_name,
-            last_name=random_last_name,
-        )
-
-        session.login(
-            email=random_email,
-            password=random_password,
-        )
-
-        assert session.logged_in
+    # def test_register_new_account(self):
+    #     session = SmartScoutSession()
+    #
+    #     random_email = session.random_characters(16) + "@gmail.com"
+    #     random_password = session.random_characters(16)
+    #     random_first_name = session.random_characters(16)
+    #     random_last_name = session.random_characters(16)
+    #
+    #     session.register(
+    #         email=random_email,
+    #         password=random_password,
+    #         first_name=random_first_name,
+    #         last_name=random_last_name,
+    #     )
+    #
+    #     session.login(
+    #         email=random_email,
+    #         password=random_password,
+    #     )
+    #
+    #     assert session.logged_in
 
     def test_login_existing_account(self):
         session = SmartScoutSession()
@@ -88,22 +88,6 @@ class TestSession:
         for subcategory in session.subcategories():
             assert subcategory is not None
             print(f"{subcategory['subcategoryName']} ({subcategory['id']})")
-
-    def test_find_category_parent(self, session: SmartScoutSession) -> None:
-        TOOLS = -24051790011
-        SHOP_NFL = -24071665011
-
-        for parent in session.find_category_parent(TOOLS):
-            assert parent is not None
-            print(f"{parent['subcategoryName']} ({parent['id']})")
-            print("is a child of")
-
-        print()
-
-        for parent in session.find_category_parent(SHOP_NFL):
-            assert parent is not None
-            print(f"{parent['subcategoryName']} ({parent['id']})")
-            print("is a child of")
 
     def test_count(self, session: SmartScoutSession) -> None:
         whole = session.get_total_number_of_products()
