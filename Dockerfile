@@ -8,10 +8,10 @@ FROM python:3.11
 
 # See https://github.com/opencontainers/image-spec/blob/master/annotations.md
 LABEL name="smartscout-scrape"
-LABEL version="0.1.0"
+LABEL version="0.2.1"
 LABEL vendor="regulad"
 LABEL org.opencontainers.image.title="smartscout-scrape"
-LABEL org.opencontainers.image.version="0.1.0"
+LABEL org.opencontainers.image.version="0.2.1"
 LABEL org.opencontainers.image.url="https://github.com/regulad/smartscout-scrape"
 LABEL org.opencontainers.image.documentation="https://github.com/regulad/smartscout-scrape"
 
