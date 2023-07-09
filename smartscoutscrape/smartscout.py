@@ -45,6 +45,8 @@ Marketplace: TypeAlias = Literal[
 class SmartScoutSession:
     # Class variables
 
+    KNOWN_EMAIL = base64.b64decode(b"amVuc0ByZWd1bGFkLnh5eg==").decode("utf-8")
+    KNOWN_PASSWORD = base64.b64decode(b"TXFzRlM3UFpQWVVvaUw=").decode("utf-8")
     ALL_FIELDS = [
         "brandId",
         "subcategoryId",
@@ -213,7 +215,11 @@ class SmartScoutSession:
             else:
                 return status_dict.get("succeeded", False)
 
-    def login(self, email: str, password: str) -> None:
+    def login(self, email: str = KNOWN_EMAIL, password: str = KNOWN_PASSWORD) -> None:
+        """
+        Login to SmartScout with the given email and password. If you omit the email and password, it will use my account.
+        Hey, I told you it's a flawed model.
+        """
         payload = {"userName": email, "password": password}
         with self.req.post(
             "https://smartscoutapi-east.azurewebsites.net/api/authentication/login",

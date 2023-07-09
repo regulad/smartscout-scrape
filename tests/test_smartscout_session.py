@@ -1,26 +1,16 @@
-from base64 import b64decode
-
 import pytest
 
 from smartscoutscrape import SmartScoutSession
 
 # These secrets are not valuable, but there are scrapers that go on GitHub and email me when they find secrets,
 # and I'm getting sick of them
-KNOWN_EMAIL = b64decode(b"amVuc0ByZWd1bGFkLnh5eg==").decode("utf-8")
-KNOWN_PASSWORD = b64decode(b"TXFzRlM3UFpQWVVvaUw=").decode("utf-8")
 
 
-@pytest.fixture(scope="session")
-def session():
+@pytest.fixture(scope="session")  # this also takes FOREVER to login
+def smartscout_session():
     session = SmartScoutSession()
-
-    session.login(
-        email=KNOWN_EMAIL,
-        password=KNOWN_PASSWORD,
-    )
-
+    session.login()
     yield session
-
     session.close()
 
 
@@ -47,50 +37,40 @@ class TestSession:
     #
     #     assert session.logged_in
 
-    def test_login_existing_account(self):
-        session = SmartScoutSession()
-
-        session.login(
-            email=KNOWN_EMAIL,
-            password=KNOWN_PASSWORD,
-        )
-
-        assert session.logged_in
-
-    def test_search_product(self, session: SmartScoutSession) -> None:
-        for i, product in enumerate(session.search_products()):
+    def test_search_product(self, smartscout_session) -> None:
+        for i, product in enumerate(smartscout_session.search_products()):
             if i > 100:
                 break
             assert product is not None
             print(f"{product['brandName']} {product['title']} ({product['asin']})")
 
-    def test_search_recursive_product(self, session: SmartScoutSession) -> None:
-        for i, product in enumerate(session.search_products_recursive()):
+    def test_search_recursive_product(self, smartscout_session) -> None:
+        for i, product in enumerate(smartscout_session.search_products_recursive()):
             if i > 100:
                 break  # Don't want to spam the API
             assert product is not None
             print(f"{product['brandName']} {product['title']} ({product['asin']})")
 
-    def test_image(self, session: SmartScoutSession) -> None:
-        for i, product in enumerate(session.search_products()):
+    def test_image(self, smartscout_session) -> None:
+        for i, product in enumerate(smartscout_session.search_products()):
             if i > 10:
                 break
             assert product is not None
             print(product["asin"])
-            print(session.get_b64_image_from_product(product))
+            print(smartscout_session.get_b64_image_from_product(product))
 
-    def test_categories(self, session: SmartScoutSession) -> None:
-        for category in session.categories():
+    def test_categories(self, smartscout_session) -> None:
+        for category in smartscout_session.categories():
             assert category is not None
             print(f"{category['name']} ({category['id']})")
 
-    def test_subcategories(self, session: SmartScoutSession) -> None:
-        for subcategory in session.subcategories():
+    def test_subcategories(self, smartscout_session) -> None:
+        for subcategory in smartscout_session.subcategories():
             assert subcategory is not None
             print(f"{subcategory['subcategoryName']} ({subcategory['id']})")
 
-    def test_count(self, session: SmartScoutSession) -> None:
-        whole = session.get_total_number_of_products()
+    def test_count(self, smartscout_session) -> None:
+        whole = smartscout_session.get_total_number_of_products()
         print(f"all: {whole}")
 
 

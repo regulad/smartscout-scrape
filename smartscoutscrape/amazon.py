@@ -15,7 +15,7 @@ from selenium.webdriver.support.wait import WebDriverWait
 from undetected_chromedriver import Chrome as UndetectedChromeDriver
 from undetected_chromedriver import ChromeOptions as UndetectedChromeOptions
 
-from smartscoutscrape.utils import THREADING_SAFE_MAX_WORKERS
+from .utils import THREADING_SAFE_MAX_WORKERS
 
 
 class AmazonBaseSession(metaclass=ABCMeta):
