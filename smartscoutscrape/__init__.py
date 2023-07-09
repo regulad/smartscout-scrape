@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .amazon import *
+from .pandas import *
 from .smartscout import *
 from .sqlite import *
 from .utils import *

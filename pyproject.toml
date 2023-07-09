@@ -34,7 +34,7 @@ name = "smartscoutscrape"
 # E.g. This might be "1.2.13", and the GitHub release will be "v1.2.13".
 # Although semantic versioning allows for build tags (metadata),
 # not all tools are compatible with it, so avoid it if you can.
-version = "0.1.0"
+version = "0.2.0"
 
 # TODO: Set the description and keywords here
 description = "Lightweight data-extraction & general use library for smartscout.com"
@@ -104,6 +104,9 @@ selenium = "^4.10.0"
 rich = "^13.4.2"
 beautifulsoup4 = "^4.12.2"
 minify-html = "^0.11.1"
+pandas = "^2"
+jupyter = "^1.0.0"
+tqdm = "^4"
 
 [tool.poetry.dev-dependencies]
 # TODO Remove build dependencies you don't want (like xdoctest, perhaps)

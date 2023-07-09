@@ -27,7 +27,7 @@ from requests import Session
 from requests.adapters import HTTPAdapter
 from requests.structures import CaseInsensitiveDict
 
-from smartscoutscrape.utils import THREADING_SAFE_MAX_WORKERS
+from .utils import THREADING_SAFE_MAX_WORKERS
 
 Marketplace: TypeAlias = Literal[
     "US",  # Amazon US

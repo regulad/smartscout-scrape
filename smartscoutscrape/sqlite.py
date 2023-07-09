@@ -5,7 +5,7 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from queue import Empty, Queue
 from sqlite3 import Connection
 from threading import Event, Lock, Thread
-from typing import Generator, Literal, Self, overload
+from typing import Generator, Self
 
 import minify_html
 from requests import HTTPError
@@ -56,6 +56,7 @@ class SmartScoutSQLiteHelper:
         self._owns_amazon_session = owns_amazon_session
 
         self.connection_lock = Lock()
+        self.closed = False
 
     def close(self) -> None:
         """Close the helper."""
@@ -558,27 +559,15 @@ class SmartScoutSQLiteHelper:
                 self.database_connection.commit()
                 return db_friendly_copy_of_product
 
-    @overload
-    def dump_all(
-        self, *, yield_rows: Literal[False], dump_default: bool, extend: bool, dump_html: bool, images: bool
-    ) -> None:
-        ...
-
-    @overload
-    def dump_all(
-        self, *, yield_rows: Literal[True], dump_default: bool, extend: bool, dump_html: bool, images: bool
-    ) -> Generator[dict[str, str | int | float | None], None, None]:
-        ...
-
     def dump_all(
         self,
         *,
-        yield_rows=False,
-        dump_default=True,
-        extend=False,
-        dump_html=False,
-        images=True,
-    ):
+        yield_rows: bool = True,
+        dump_default: bool = True,
+        extend: bool = False,
+        dump_html: bool = False,
+        images: bool = True,
+    ) -> Generator[dict[str, str | int | float | None], None, None]:
         with ThreadPoolExecutor(thread_name_prefix="SmartScoutDumper") as executor:
             finished_rows = Queue(maxsize=1000)
             gen_exit_event = Event()
@@ -628,42 +617,16 @@ class SmartScoutSQLiteHelper:
 
             executor.shutdown(wait=True)  # wait for all the threads to finish writing/fetching
 
-    @overload
     def dump_category(
         self,
         category_id: int,
         *,
-        yield_rows: Literal[False],
-        dump_default: bool,
-        extend: bool,
-        dump_html: bool,
-        images: bool,
-    ) -> None:
-        ...
-
-    @overload
-    def dump_category(
-        self,
-        category_id: int,
-        *,
-        yield_rows: Literal[True],
-        dump_default: bool,
-        extend: bool,
-        dump_html: bool,
-        images: bool,
+        yield_rows: bool = True,
+        dump_default: bool = True,
+        extend: bool = False,
+        dump_html: bool = False,
+        images: bool = True,
     ) -> Generator[dict[str, str | int | float | None], None, None]:
-        ...
-
-    def dump_category(
-        self,
-        category_id,
-        *,
-        yield_rows=False,
-        dump_default=True,
-        extend=False,
-        dump_html=False,
-        images=True,
-    ):
         """
         Scrape a category and write it to the database.
 

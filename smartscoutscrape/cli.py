@@ -160,7 +160,9 @@ def generate(
             download_task = progress.add_task("Downloading products...", total=None, start=False)
             progress.update(download_task, total=smartscout_session.get_total_number_of_products())
             try:
-                for _ in helper.dump_all(yield_rows=True, dump_default=dump, dump_html=dump_html, extend=extend, images=images):
+                for i, _ in enumerate(helper.dump_all(yield_rows=True, dump_default=dump, dump_html=dump_html, extend=extend, images=images)):
+                    if i == 0:
+                        progress.start_task(download_task)
                     progress.advance(download_task)
             finally:
                 if log_level_debug_or_higher:
