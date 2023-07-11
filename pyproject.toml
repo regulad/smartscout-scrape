@@ -105,7 +105,6 @@ rich = "^13.4.2"
 beautifulsoup4 = "^4.12.2"
 minify-html = "^0.11.1"
 pandas = "^2"
-jupyter = "^1.0.0"
 tqdm = "^4"
 
 [tool.poetry.dev-dependencies]
@@ -156,6 +155,9 @@ xdoctest                 = "^1.1.1"
 # Of course, you can remove the ` --extras "all"` line from tox.ini
 # to avoid this
 all = []
+
+[tool.poetry.group.dev.dependencies]
+jupyter = "^1.0.0"
 
 
 #########################################################################################
