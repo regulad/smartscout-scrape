@@ -130,7 +130,7 @@ sphinx                   = "^6"
 sphinx-autoapi           = "^2.1.1"
 sphinx-copybutton        = "^0.5.2"
 sphinx-rtd-theme         = "^1.2.2"
-tomlkit                  = "^0.11.8"
+tomlkit                  = "^0.12.1"
 
 # These are used directly in the default build pipeline
 # ... but they're generally optional, and the build won't fail if you remove them
